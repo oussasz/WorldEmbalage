@@ -263,10 +263,11 @@ class MainWindow(QMainWindow):
             
             dlg = QuotationDialog(clients, self)
             if dlg.exec():
-                quotation_data, line_items_data = dlg.get_data()
+                data = dlg.get_data()
+                line_items_data = data['line_items']
                 
                 # Validation
-                if not quotation_data['reference']:
+                if not data['reference']:
                     QMessageBox.warning(self, 'Validation', 'Référence requise')
                     return
                 if not line_items_data:
@@ -275,24 +276,29 @@ class MainWindow(QMainWindow):
                 
                 # Create quotation
                 quotation = Quotation(
-                    reference=quotation_data['reference'],
-                    client_id=quotation_data['client_id'],
-                    quotation_date=quotation_data['quotation_date'],
-                    valid_until=quotation_data['valid_until'],
-                    notes=quotation_data['notes']
+                    reference=data['reference'],
+                    client_id=data['client_id'],
+                    issue_date=data['issue_date'],
+                    valid_until=data['valid_until'],
+                    notes=data['notes']
                 )
                 session.add(quotation)
                 session.flush()  # Get quotation ID
                 
                 # Create line items
                 total_amount = Decimal('0')
-                for item_data in line_items_data:
+                for idx, item_data in enumerate(line_items_data, start=1):
+                    unit_price = Decimal(str(item_data['unit_price']))
+                    quantity = item_data['quantity']
+                    total_price = unit_price * quantity
+                    
                     line_item = QuotationLineItem(
                         quotation_id=quotation.id,
-                        line_number=item_data['line_number'],
+                        line_number=idx,
                         description=item_data['description'],
-                        quantity=item_data['quantity'],
-                        unit_price=Decimal(str(item_data['unit_price'])),
+                        quantity=quantity,
+                        unit_price=unit_price,
+                        total_price=total_price,
                         length_mm=item_data.get('length_mm'),
                         width_mm=item_data.get('width_mm'),
                         height_mm=item_data.get('height_mm'),
@@ -301,26 +307,32 @@ class MainWindow(QMainWindow):
                         is_cliche=item_data.get('is_cliche', False)
                     )
                     session.add(line_item)
-                    total_amount += Decimal(str(item_data['quantity'])) * Decimal(str(item_data['unit_price']))
+                    total_amount += total_price
                 
                 # Create client order
                 client_order = ClientOrder(
-                    client_id=quotation_data['client_id'],
-                    reference=quotation_data['reference'],
-                    order_date=quotation_data['quotation_date'],
+                    client_id=data['client_id'],
+                    reference=data['reference'],
+                    order_date=data['issue_date'],
                     total_amount=total_amount,
                     quotation_id=quotation.id
                 )
                 session.add(client_order)
+                session.flush()  # Get client order ID
                 
                 # Create order line items
-                for item_data in line_items_data:
+                for idx, item_data in enumerate(line_items_data, start=1):
+                    unit_price = Decimal(str(item_data['unit_price']))
+                    quantity = item_data['quantity']
+                    total_price = unit_price * quantity
+                    
                     order_line_item = ClientOrderLineItem(
                         client_order_id=client_order.id,
-                        line_number=item_data['line_number'],
+                        line_number=idx,
                         description=item_data['description'],
-                        quantity=item_data['quantity'],
-                        unit_price=Decimal(str(item_data['unit_price'])),
+                        quantity=quantity,
+                        unit_price=unit_price,
+                        total_price=total_price,
                         length_mm=item_data.get('length_mm'),
                         width_mm=item_data.get('width_mm'),
                         height_mm=item_data.get('height_mm'),
@@ -331,8 +343,8 @@ class MainWindow(QMainWindow):
                     session.add(order_line_item)
                 
                 session.commit()
-                QMessageBox.information(self, 'Succès', f'Devis {quotation_data["reference"]} créé avec {len(line_items_data)} articles')
-                self.dashboard.add_activity("D", f"Nouveau devis: {quotation_data['reference']}", "#FFC107")
+                QMessageBox.information(self, 'Succès', f'Devis {data["reference"]} créé avec {len(line_items_data)} articles')
+                self.dashboard.add_activity("D", f"Nouveau devis: {data['reference']}", "#FFC107")
                 self.refresh_all()
                 
         except Exception as e:
@@ -428,9 +440,10 @@ class MainWindow(QMainWindow):
             dlg = EditQuotationDialog(client_order.quotation, clients, self)
             
             if dlg.exec():
-                quotation_data, line_items_data = dlg.get_data()
+                data = dlg.get_data()
+                line_items_data = data['line_items']
                 
-                if not quotation_data['reference']:
+                if not data.get('reference'):
                     QMessageBox.warning(self, 'Validation', 'Référence requise')
                     return
                 if not line_items_data:
@@ -439,11 +452,11 @@ class MainWindow(QMainWindow):
                 
                 # Update quotation
                 quotation = client_order.quotation
-                quotation.reference = quotation_data['reference']
-                quotation.client_id = quotation_data['client_id']
-                quotation.issue_date = quotation_data.get('quotation_date') or quotation.issue_date
-                quotation.valid_until = quotation_data['valid_until']
-                quotation.notes = quotation_data['notes']
+                quotation.reference = data.get('reference') or quotation.reference
+                quotation.client_id = data['client_id']
+                quotation.issue_date = data.get('issue_date') or quotation.issue_date
+                quotation.valid_until = data['valid_until']
+                quotation.notes = data['notes']
                 
                 # Delete existing line items
                 for item in quotation.line_items:
@@ -453,13 +466,18 @@ class MainWindow(QMainWindow):
                 
                 # Create new line items
                 total_amount = Decimal('0')
-                for item_data in line_items_data:
+                for idx, item_data in enumerate(line_items_data, start=1):
+                    unit_price = Decimal(str(item_data['unit_price']))
+                    quantity = item_data['quantity']
+                    total_price = unit_price * quantity
+                    
                     line_item = QuotationLineItem(
                         quotation_id=quotation.id,
-                        line_number=item_data['line_number'],
+                        line_number=idx,
                         description=item_data['description'],
-                        quantity=item_data['quantity'],
-                        unit_price=Decimal(str(item_data['unit_price'])),
+                        quantity=quantity,
+                        unit_price=unit_price,
+                        total_price=total_price,
                         length_mm=item_data.get('length_mm'),
                         width_mm=item_data.get('width_mm'),
                         height_mm=item_data.get('height_mm'),
@@ -471,10 +489,11 @@ class MainWindow(QMainWindow):
                     
                     order_line_item = ClientOrderLineItem(
                         client_order_id=client_order.id,
-                        line_number=item_data['line_number'],
+                        line_number=idx,
                         description=item_data['description'],
-                        quantity=item_data['quantity'],
-                        unit_price=Decimal(str(item_data['unit_price'])),
+                        quantity=quantity,
+                        unit_price=unit_price,
+                        total_price=total_price,
                         length_mm=item_data.get('length_mm'),
                         width_mm=item_data.get('width_mm'),
                         height_mm=item_data.get('height_mm'),
@@ -483,16 +502,16 @@ class MainWindow(QMainWindow):
                         is_cliche=item_data.get('is_cliche', False)
                     )
                     session.add(order_line_item)
-                    total_amount += Decimal(str(item_data['quantity'])) * Decimal(str(item_data['unit_price']))
+                    total_amount += total_price
                 
                 # Update client order
-                client_order.reference = quotation_data['reference']
-                client_order.client_id = quotation_data['client_id']
+                client_order.reference = data.get('reference') or client_order.reference
+                client_order.client_id = data['client_id']
                 client_order.total_amount = total_amount  # type: ignore
                 
                 session.commit()
-                QMessageBox.information(self, 'Succès', f'Devis {quotation_data["reference"]} modifié')
-                self.dashboard.add_activity("M", f"Devis modifié: {quotation_data['reference']}", "#17A2B8")
+                QMessageBox.information(self, 'Succès', f'Devis {data.get("reference", "unknown")} modifié')
+                self.dashboard.add_activity("M", f"Devis modifié: {data.get('reference', 'unknown')}", "#17A2B8")
                 self.refresh_all()
                 
         except Exception as e:
