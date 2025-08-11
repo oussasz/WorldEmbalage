@@ -1,0 +1,32 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Setup Environment",
+      "type": "shell",
+      "command": "python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt",
+      "group": "build",
+      "detail": "Create virtual environment and install dependencies",
+      "problemMatcher": [],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      }
+    },
+    {
+      "label": "Setup and Run World Embalage Application",
+      "type": "shell",
+      "command": "source venv/bin/activate && python src/main.py",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "detail": "Run the World Embalage carton manufacturing management application",
+      "isBackground": false,
+      "problemMatcher": ["$python"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": "Setup Environment"
+    }
+  ]
+}

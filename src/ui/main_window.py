@@ -1,0 +1,696 @@
+from __future__ import annotations
+import datetime
+from decimal import Decimal
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QMenuBar, QMenu, QMessageBox, QTabWidget, QToolBar, QLineEdit, QStatusBar, QDialog
+from PyQt6.QtGui import QAction, QIcon
+from PyQt6.QtCore import Qt
+from config.database import SessionLocal
+from models.suppliers import Supplier
+from models.clients import Client
+from models.orders import ClientOrder, SupplierOrder
+from models.orders import SupplierOrderStatus, ClientOrderStatus, Reception, Quotation
+from models.production import ProductionBatch
+from ui.dialogs.supplier_dialog import SupplierDialog
+from ui.dialogs.client_dialog import ClientDialog
+from ui.dialogs.raw_material_order_dialog import RawMaterialOrderDialog
+from ui.dialogs.quotation_dialog import QuotationDialog
+from ui.dialogs.edit_quotation_dialog import EditQuotationDialog
+from ui.dialogs.reception_dialog import ReceptionDialog
+from ui.dialogs.production_dialog import ProductionDialog
+from ui.widgets.data_grid import DataGrid
+from ui.widgets.dashboard import Dashboard
+from ui.styles import IconManager
+from typing import cast, Any
+from models.orders import QuotationLineItem, ClientOrderLineItem
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('World Embalage - Gestion Atelier Carton')
+        self.setWindowIcon(IconManager.create_text_icon("WE", bg_color="#2C3E50"))
+        self._build_ui()
+
+    def _build_ui(self) -> None:
+        """Build the main UI structure."""
+        # Create central widget
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # Main layout
+        layout = QVBoxLayout(central_widget)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+        
+        # Menu bar
+        self._create_menu_bar()
+        
+        # Toolbar with search
+        self._create_toolbar()
+        
+        # Tab widget for different views
+        self.tab_widget = QTabWidget()
+        self.tab_widget.setTabPosition(QTabWidget.TabPosition.North)
+        layout.addWidget(self.tab_widget)
+        
+        # Create dashboard
+        self.dashboard = Dashboard()
+        self.tab_widget.addTab(self.dashboard, "📊 Tableau de Bord")
+        
+        # Create data grids for different entities
+        self._create_data_grids()
+        
+        # Status bar
+        self.status_bar = QStatusBar()
+        self.setStatusBar(self.status_bar)
+        self.status_bar.showMessage("World Embalage - Prêt")
+        
+        # Resize window
+        self.resize(1400, 800)
+        
+        # Load initial data
+        self.refresh_all()
+
+    def _create_menu_bar(self) -> None:
+        """Create the application menu bar."""
+        menubar = self.menuBar()
+        if menubar is None:
+            return
+
+        # File menu
+        file_menu = menubar.addMenu('&Fichier')
+        if file_menu:
+            quit_action = QAction('&Quitter', self)
+            quit_action.setShortcut('Ctrl+Q')
+            quit_action.triggered.connect(self.close)
+            file_menu.addAction(quit_action)
+
+        # Data menu
+        data_menu = menubar.addMenu('&Données')
+        if data_menu:
+            suppliers_action = QAction('&Fournisseurs', self)
+            suppliers_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(1))
+            data_menu.addAction(suppliers_action)
+
+            clients_action = QAction('&Clients', self)
+            clients_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(2))
+            data_menu.addAction(clients_action)
+
+            orders_action = QAction('C&ommandes', self)
+            orders_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(3))
+            data_menu.addAction(orders_action)
+
+    def _create_toolbar(self) -> None:
+        """Create the main toolbar."""
+        toolbar = QToolBar()
+        self.addToolBar(toolbar)
+        
+        # Search field
+        self.search_field = QLineEdit()
+        self.search_field.setPlaceholderText("Rechercher...")
+        self.search_field.setMaximumWidth(250)
+        toolbar.addWidget(QLabel("🔍"))
+        toolbar.addWidget(self.search_field)
+        
+        toolbar.addSeparator()
+        
+        # Refresh action
+        refresh_action = QAction('🔄 Actualiser', self)
+        refresh_action.triggered.connect(self.refresh_all)
+        toolbar.addAction(refresh_action)
+
+    def _create_data_grids(self) -> None:
+        """Create data grids for each entity type."""
+        # Suppliers tab
+        self.suppliers_grid = DataGrid(
+            ["ID", "Nom", "Contact", "Téléphone", "Email", "Adresse"]
+        )
+        self.suppliers_grid.add_action_button("➕ Nouveau", self._new_supplier)
+        self.tab_widget.addTab(self.suppliers_grid, "🏪 Fournisseurs")
+        
+        # Clients tab
+        self.clients_grid = DataGrid(
+            ["ID", "Nom", "Contact", "Téléphone", "Email", "Adresse"]
+        )
+        self.clients_grid.add_action_button("➕ Nouveau", self._new_client)
+        self.tab_widget.addTab(self.clients_grid, "👥 Clients")
+        
+        # Orders tab with enhanced context menu
+        self.orders_grid = DataGrid(
+            ["ID", "Référence", "Client", "Date", "Statut", "Total (DA)"]
+        )
+        self.orders_grid.add_action_button("➕ Devis", self._new_quotation)
+        
+        # Setup context menu for orders
+        self._setup_context_menus()
+        
+        self.tab_widget.addTab(self.orders_grid, "📋 Commandes")
+        
+        # Supplier Orders tab
+        self.supplier_orders_grid = DataGrid(
+            ["ID", "Référence", "Fournisseur", "Statut", "Date"]
+        )
+        self.supplier_orders_grid.add_action_button("➕ Nouvelle", self._new_supplier_order)
+        self.tab_widget.addTab(self.supplier_orders_grid, "📦 Cmd. Fournisseurs")
+        
+        # Receptions tab
+        self.receptions_grid = DataGrid(
+            ["ID", "Référence", "Commande", "Date", "Statut"]
+        )
+        self.receptions_grid.add_action_button("➕ Nouvelle", self._new_reception)
+        self.tab_widget.addTab(self.receptions_grid, "📥 Réceptions")
+        
+        # Production tab
+        self.production_grid = DataGrid(
+            ["ID", "Référence", "Commande", "Date début", "Statut", "Quantité"]
+        )
+        self.production_grid.add_action_button("➕ Nouveau", self._new_production)
+        self.tab_widget.addTab(self.production_grid, "🏭 Production")
+
+    def _setup_context_menus(self):
+        """Setup context menus for data grids"""
+        # Orders context menu
+        self.orders_grid.add_context_action("edit", "✏️ Modifier devis")
+        self.orders_grid.add_context_action("delete", "🗑️ Supprimer devis")
+        self.orders_grid.add_context_action("create_supplier_order", "📦 Créer commande matières")
+        
+        # Connect context menu signal
+        self.orders_grid.contextMenuActionTriggered.connect(self._handle_orders_context_menu)
+
+    def _handle_orders_context_menu(self, action_name: str, row: int, row_data: list):
+        """Handle context menu actions for orders grid"""
+        if not row_data or len(row_data) == 0:
+            return
+            
+        # Assuming first column is ID and second is reference
+        order_id_str = row_data[0] if len(row_data) > 0 else None
+        reference = row_data[1] if len(row_data) > 1 else ""
+        
+        if not order_id_str:
+            return
+            
+        try:
+            order_id = int(order_id_str)
+        except (ValueError, TypeError):
+            return
+        
+        if action_name == "edit":
+            self._edit_quotation_by_id(order_id, reference)
+        elif action_name == "delete":
+            self._delete_quotation_by_id(order_id, reference)
+        elif action_name == "create_supplier_order":
+            self._create_supplier_order_for_client_order(order_id, reference)
+
+    def _new_supplier(self) -> None:
+        """Open dialog to create a new supplier."""
+        dlg = SupplierDialog(self)
+        if dlg.exec():
+            data = dlg.get_data()
+            session = SessionLocal()
+            try:
+                supplier = Supplier(**data)
+                session.add(supplier)
+                session.commit()
+                QMessageBox.information(self, 'Succès', f'Fournisseur {data["name"]} créé')
+                self.dashboard.add_activity("F", f"Nouveau fournisseur: {data['name']}", "#17A2B8")
+                self.refresh_all()
+            except Exception as e:
+                session.rollback()
+                QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création: {str(e)}')
+            finally:
+                session.close()
+
+    def _new_client(self) -> None:
+        """Open dialog to create a new client."""
+        dlg = ClientDialog(self)
+        if dlg.exec():
+            data = dlg.get_data()
+            session = SessionLocal()
+            try:
+                client = Client(**data)
+                session.add(client)
+                session.commit()
+                QMessageBox.information(self, 'Succès', f'Client {data["name"]} créé')
+                self.dashboard.add_activity("C", f"Nouveau client: {data['name']}", "#28A745")
+                self.refresh_all()
+            except Exception as e:
+                session.rollback()
+                QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création: {str(e)}')
+            finally:
+                session.close()
+
+    def _new_supplier_order(self) -> None:
+        """Open dialog to create a new supplier order."""
+        # For standalone supplier orders, redirect to context menu workflow
+        QMessageBox.information(
+            self, 
+            'Information', 
+            'Pour créer une commande matières avec calculs automatiques:\n\n'
+            '1. Allez dans l\'onglet "Commandes"\n'
+            '2. Clic droit sur une commande client\n'
+            '3. Sélectionnez "Créer commande matières"\n\n'
+            'Les dimensions des plaques seront calculées automatiquement.'
+        )
+
+    def _new_quotation(self) -> None:
+        """Open dialog to create a new quotation."""
+        session = SessionLocal()
+        try:
+            clients = session.query(Client).all()
+            if not clients:
+                QMessageBox.warning(self, 'Attention', 'Aucun client disponible. Créez d\'abord un client.')
+                return
+            
+            dlg = QuotationDialog(clients, self)
+            if dlg.exec():
+                quotation_data, line_items_data = dlg.get_data()
+                
+                # Validation
+                if not quotation_data['reference']:
+                    QMessageBox.warning(self, 'Validation', 'Référence requise')
+                    return
+                if not line_items_data:
+                    QMessageBox.warning(self, 'Validation', 'Au moins un article requis')
+                    return
+                
+                # Create quotation
+                quotation = Quotation(
+                    reference=quotation_data['reference'],
+                    client_id=quotation_data['client_id'],
+                    quotation_date=quotation_data['quotation_date'],
+                    valid_until=quotation_data['valid_until'],
+                    notes=quotation_data['notes']
+                )
+                session.add(quotation)
+                session.flush()  # Get quotation ID
+                
+                # Create line items
+                total_amount = Decimal('0')
+                for item_data in line_items_data:
+                    line_item = QuotationLineItem(
+                        quotation_id=quotation.id,
+                        line_number=item_data['line_number'],
+                        description=item_data['description'],
+                        quantity=item_data['quantity'],
+                        unit_price=Decimal(str(item_data['unit_price'])),
+                        length_mm=item_data.get('length_mm'),
+                        width_mm=item_data.get('width_mm'),
+                        height_mm=item_data.get('height_mm'),
+                        color=item_data.get('color'),
+                        cardboard_type=item_data.get('cardboard_type'),
+                        is_cliche=item_data.get('is_cliche', False)
+                    )
+                    session.add(line_item)
+                    total_amount += Decimal(str(item_data['quantity'])) * Decimal(str(item_data['unit_price']))
+                
+                # Create client order
+                client_order = ClientOrder(
+                    client_id=quotation_data['client_id'],
+                    reference=quotation_data['reference'],
+                    order_date=quotation_data['quotation_date'],
+                    total_amount=total_amount,
+                    quotation_id=quotation.id
+                )
+                session.add(client_order)
+                
+                # Create order line items
+                for item_data in line_items_data:
+                    order_line_item = ClientOrderLineItem(
+                        client_order_id=client_order.id,
+                        line_number=item_data['line_number'],
+                        description=item_data['description'],
+                        quantity=item_data['quantity'],
+                        unit_price=Decimal(str(item_data['unit_price'])),
+                        length_mm=item_data.get('length_mm'),
+                        width_mm=item_data.get('width_mm'),
+                        height_mm=item_data.get('height_mm'),
+                        color=item_data.get('color'),
+                        cardboard_type=item_data.get('cardboard_type'),
+                        is_cliche=item_data.get('is_cliche', False)
+                    )
+                    session.add(order_line_item)
+                
+                session.commit()
+                QMessageBox.information(self, 'Succès', f'Devis {quotation_data["reference"]} créé avec {len(line_items_data)} articles')
+                self.dashboard.add_activity("D", f"Nouveau devis: {quotation_data['reference']}", "#FFC107")
+                self.refresh_all()
+                
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création: {str(e)}')
+        finally:
+            session.close()
+
+    def _edit_quotation(self):
+        """Placeholder for edit quotation - method for backward compatibility"""
+        pass
+    
+    def _delete_quotation(self):
+        """Placeholder for delete quotation - method for backward compatibility"""
+        pass
+    
+    def _edit_quotation_context(self):
+        """Placeholder for context menu edit quotation"""
+        pass
+    
+    def _delete_quotation_context(self):
+        """Placeholder for context menu delete quotation"""
+        pass
+
+    def _new_reception(self) -> None:
+        """Open dialog to create a new reception."""
+        session = SessionLocal()
+        try:
+            orders = session.query(SupplierOrder).filter(
+                SupplierOrder.status.in_([SupplierOrderStatus.PENDING, SupplierOrderStatus.CONFIRMED])
+            ).all()
+            if not orders:
+                QMessageBox.warning(self, 'Attention', 'Aucune commande fournisseur en attente.')
+                return
+                
+            dlg = ReceptionDialog(orders, self)
+            if dlg.exec():
+                data = dlg.get_data()
+                if not data['reference']:
+                    QMessageBox.warning(self, 'Validation', 'Référence requise')
+                    return
+                reception = Reception(**data)
+                session.add(reception)
+                session.commit()
+                QMessageBox.information(self, 'Succès', f'Réception {data["reference"]} créée')
+                self.dashboard.add_activity("R", f"Nouvelle réception: {data['reference']}", "#6F42C1")
+                self.refresh_all()
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création: {str(e)}')
+        finally:
+            session.close()
+
+    def _new_production(self) -> None:
+        """Open dialog to create a new production batch."""
+        session = SessionLocal()
+        try:
+            orders = session.query(ClientOrder).filter(
+                ClientOrder.status.in_([ClientOrderStatus.CONFIRMED, ClientOrderStatus.IN_PRODUCTION])
+            ).all()
+            if not orders:
+                QMessageBox.warning(self, 'Attention', 'Aucune commande client confirmée.')
+                return
+                
+            dlg = ProductionDialog(orders, self)
+            if dlg.exec():
+                data = dlg.get_data()
+                if not data['reference']:
+                    QMessageBox.warning(self, 'Validation', 'Référence requise')
+                    return
+                batch = ProductionBatch(**data)
+                session.add(batch)
+                session.commit()
+                QMessageBox.information(self, 'Succès', f'Lot de production {data["reference"]} créé')
+                self.dashboard.add_activity("P", f"Nouveau lot: {data['reference']}", "#DC3545")
+                self.refresh_all()
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création: {str(e)}')
+        finally:
+            session.close()
+
+    def _edit_quotation_by_id(self, order_id: int, reference: str):
+        """Edit quotation by order ID"""
+        session = SessionLocal()
+        try:
+            client_order = session.get(ClientOrder, order_id)
+            if not client_order or not client_order.quotation:
+                QMessageBox.warning(self, 'Erreur', 'Devis introuvable')
+                return
+                
+            clients = session.query(Client).all()
+            dlg = EditQuotationDialog(client_order.quotation, clients, self)
+            
+            if dlg.exec():
+                quotation_data, line_items_data = dlg.get_data()
+                
+                if not quotation_data['reference']:
+                    QMessageBox.warning(self, 'Validation', 'Référence requise')
+                    return
+                if not line_items_data:
+                    QMessageBox.warning(self, 'Validation', 'Au moins un article requis')
+                    return
+                
+                # Update quotation
+                quotation = client_order.quotation
+                quotation.reference = quotation_data['reference']
+                quotation.client_id = quotation_data['client_id']
+                quotation.issue_date = quotation_data.get('quotation_date') or quotation.issue_date
+                quotation.valid_until = quotation_data['valid_until']
+                quotation.notes = quotation_data['notes']
+                
+                # Delete existing line items
+                for item in quotation.line_items:
+                    session.delete(item)
+                for item in client_order.line_items:
+                    session.delete(item)
+                
+                # Create new line items
+                total_amount = Decimal('0')
+                for item_data in line_items_data:
+                    line_item = QuotationLineItem(
+                        quotation_id=quotation.id,
+                        line_number=item_data['line_number'],
+                        description=item_data['description'],
+                        quantity=item_data['quantity'],
+                        unit_price=Decimal(str(item_data['unit_price'])),
+                        length_mm=item_data.get('length_mm'),
+                        width_mm=item_data.get('width_mm'),
+                        height_mm=item_data.get('height_mm'),
+                        color=item_data.get('color'),
+                        cardboard_type=item_data.get('cardboard_type'),
+                        is_cliche=item_data.get('is_cliche', False)
+                    )
+                    session.add(line_item)
+                    
+                    order_line_item = ClientOrderLineItem(
+                        client_order_id=client_order.id,
+                        line_number=item_data['line_number'],
+                        description=item_data['description'],
+                        quantity=item_data['quantity'],
+                        unit_price=Decimal(str(item_data['unit_price'])),
+                        length_mm=item_data.get('length_mm'),
+                        width_mm=item_data.get('width_mm'),
+                        height_mm=item_data.get('height_mm'),
+                        color=item_data.get('color'),
+                        cardboard_type=item_data.get('cardboard_type'),
+                        is_cliche=item_data.get('is_cliche', False)
+                    )
+                    session.add(order_line_item)
+                    total_amount += Decimal(str(item_data['quantity'])) * Decimal(str(item_data['unit_price']))
+                
+                # Update client order
+                client_order.reference = quotation_data['reference']
+                client_order.client_id = quotation_data['client_id']
+                client_order.total_amount = total_amount  # type: ignore
+                
+                session.commit()
+                QMessageBox.information(self, 'Succès', f'Devis {quotation_data["reference"]} modifié')
+                self.dashboard.add_activity("M", f"Devis modifié: {quotation_data['reference']}", "#17A2B8")
+                self.refresh_all()
+                
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la modification: {str(e)}')
+        finally:
+            session.close()
+
+    def _delete_quotation_by_id(self, order_id: int, reference: str):
+        """Delete quotation by order ID"""
+        reply = QMessageBox.question(
+            self, 
+            'Confirmation', 
+            f'Êtes-vous sûr de vouloir supprimer le devis {reference} ?\n\nCette action est irréversible.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            session = SessionLocal()
+            try:
+                client_order = session.get(ClientOrder, order_id)
+                if client_order:
+                    # Delete associated quotation and line items (cascade should handle this)
+                    session.delete(client_order)
+                    session.commit()
+                    QMessageBox.information(self, 'Succès', f'Devis {reference} supprimé')
+                    self.dashboard.add_activity("S", f"Devis supprimé: {reference}", "#DC3545")
+                    self.refresh_all()
+                else:
+                    QMessageBox.warning(self, 'Erreur', 'Devis introuvable')
+            except Exception as e:
+                session.rollback()
+                QMessageBox.critical(self, 'Erreur', f'Erreur lors de la suppression: {str(e)}')
+            finally:
+                session.close()
+
+    def _create_supplier_order_for_client_order(self, order_id: int, reference: str):
+        """Create a supplier order for raw materials based on client order"""
+        session = SessionLocal()
+        try:
+            client_order = session.get(ClientOrder, order_id)
+            if not client_order:
+                QMessageBox.warning(self, 'Erreur', 'Commande introuvable')
+                return
+                
+            suppliers = session.query(Supplier).all()
+            if not suppliers:
+                QMessageBox.warning(self, 'Attention', 'Aucun fournisseur disponible. Créez d\'abord un fournisseur.')
+                return
+            
+            dlg = RawMaterialOrderDialog(suppliers, client_order, self)
+            
+            if dlg.exec():
+                data = dlg.get_data()
+                if not data['reference']:
+                    QMessageBox.warning(self, 'Validation', 'Référence requise')
+                    return
+                    
+                # Create supplier order linked to client order
+                supplier_order = SupplierOrder(
+                    supplier_id=data['supplier_id'],
+                    reference=data['reference'],
+                    notes=f"Matières pour commande client {reference}\n"
+                            f"Plaques {data['length_mm']}×{data['width_mm']}mm\n"
+                            f"Type: {data['material_type']}\n"
+                            f"Quantité: {data['quantity']}\n"
+                            f"{data.get('notes', '')}"
+                )
+                session.add(supplier_order)
+                session.flush()
+                
+                # Link client order to supplier order
+                client_order.supplier_order_id = supplier_order.id
+                session.commit()
+                
+                calc_info = ""
+                if data.get('calculated_data'):
+                    calc_info = f" (calculé automatiquement)"
+                
+                QMessageBox.information(
+                    self, 
+                    'Succès', 
+                    f'Commande matières {data["reference"]} créée{calc_info}\n\n'
+                    f'Dimensions plaque: {data["length_mm"]}×{data["width_mm"]}mm\n'
+                    f'Quantité: {data["quantity"]} plaques\n'
+                    f'Liée à la commande client: {reference}'
+                )
+                self.dashboard.add_activity("CM", f"Commande matières pour {reference}: {data['reference']}", "#6F42C1")
+                self.refresh_all()
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création: {str(e)}')
+        finally:
+            session.close()
+
+    def refresh_all(self) -> None:
+        """Refresh all data grids."""
+        session = None
+        try:
+            session = SessionLocal()
+            
+            # Refresh suppliers
+            suppliers = session.query(Supplier).all()
+            suppliers_data = [
+                [
+                    str(s.id),
+                    s.name or "",
+                    getattr(s, 'contact_person', '') or "",
+                    s.phone or "",
+                    s.email or "",
+                    s.address or "",
+                ]
+                for s in suppliers
+            ]
+            self.suppliers_grid.load_rows(suppliers_data)
+            
+            # Refresh clients
+            clients = session.query(Client).all()
+            clients_data = [
+                [
+                    str(c.id),
+                    c.name or "",
+                    getattr(c, 'contact_person', '') or "",
+                    c.phone or "",
+                    c.email or "",
+                    c.address or "",
+                ]
+                for c in clients
+            ]
+            self.clients_grid.load_rows(clients_data)
+            
+            # Refresh orders
+            orders = session.query(ClientOrder).all()
+            orders_data = [
+                [
+                    str(o.id),
+                    o.reference or "",
+                    o.client.name if o.client else "N/A",
+                    str(o.order_date) if o.order_date else "",
+                    o.status.value if o.status else "N/A",
+                    f"{o.total_amount:,.2f}" if o.total_amount is not None else "0.00",
+                ]
+                for o in orders
+            ]
+            self.orders_grid.load_rows(orders_data)
+            
+            # Refresh supplier orders
+            supplier_orders = session.query(SupplierOrder).all()
+            supplier_orders_data = [
+                [
+                    str(so.id),
+                    so.reference or "",
+                    so.supplier.name if so.supplier else "N/A",
+                    so.status.value if so.status else "N/A",
+                    getattr(so, 'created_date', None) and getattr(so, 'created_date').isoformat() or "",
+                ]
+                for so in supplier_orders
+            ]
+            self.supplier_orders_grid.load_rows(supplier_orders_data)
+            
+            # Refresh receptions
+            receptions = session.query(Reception).all()
+            receptions_data = [
+                [
+                    str(r.id),
+                    getattr(r, 'reference', ''),
+                    r.supplier_order.reference if r.supplier_order else "N/A",
+                    getattr(r, 'reception_date', None) and getattr(r, 'reception_date').isoformat() or "",
+                    getattr(r, 'status', None) and getattr(r, 'status').value or "N/A",
+                ]
+                for r in receptions
+            ]
+            self.receptions_grid.load_rows(receptions_data)
+            
+            # Refresh production
+            production_batches = session.query(ProductionBatch).all()
+            production_data = [
+                [
+                    str(pb.id),
+                    getattr(pb, 'reference', ''),
+                    getattr(pb, 'client_order', None) and getattr(getattr(pb, 'client_order'), 'reference', 'N/A') or "N/A",
+                    getattr(pb, 'start_date', None) and getattr(pb, 'start_date').isoformat() or "",
+                    getattr(pb, 'status', None) and getattr(pb, 'status').value or "N/A",
+                    str(getattr(pb, 'quantity_produced', 0) or 0),
+                ]
+                for pb in production_batches
+            ]
+            self.production_grid.load_rows(production_data)
+            
+            # Update dashboard
+            if hasattr(self, 'dashboard'):
+                self.dashboard.refresh_data()
+                
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'actualisation: {str(e)}')
+        finally:
+            if session is not None:
+                session.close()
+
+__all__ = ['MainWindow']
