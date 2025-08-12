@@ -12,22 +12,30 @@ class OrderService:
     def __init__(self, db: Session):
         self.db = db
 
-    def create_quotation(self, client_id: int, reference: str, notes: str | None = None, line_items: Sequence[dict] | None = None) -> Quotation:
+    def create_quotation(self, client_id: int, reference: str, notes: str | None = None, line_items: Sequence[dict] | None = None, is_initial: bool = False) -> Quotation:
         client = self.db.get(Client, client_id)
         if not client:
             raise ValueError("Client not found")
-        q = Quotation(client_id=client_id, reference=reference, notes=notes or '')
+        q = Quotation(client_id=client_id, reference=reference, notes=notes or '', is_initial=is_initial)
         self.db.add(q)
         self.db.flush()
         total = Decimal('0')
         for idx, item in enumerate(line_items or [], start=1):
+            # Calculate total price based on numeric quantity
+            import re
+            quantity_str = str(item.get('quantity') or '0')
+            numbers = re.findall(r'\d+', quantity_str)
+            numeric_quantity = int(numbers[-1]) if numbers else 0
+            unit_price = Decimal(str(item.get('unit_price') or '0'))
+            calculated_total = unit_price * numeric_quantity
+
             li = QuotationLineItem(
                 quotation_id=q.id,
                 line_number=idx,
                 description=str(item.get('description') or ''),
-                quantity=int(item.get('quantity') or 0),
-                unit_price=Decimal(str(item.get('unit_price') or '0')),
-                total_price=Decimal(str(item.get('total_price') or '0')),
+                quantity=quantity_str,
+                unit_price=unit_price,
+                total_price=calculated_total, # Use the calculated total
                 length_mm=item.get('length_mm'),
                 width_mm=item.get('width_mm'),
                 height_mm=item.get('height_mm'),
@@ -36,7 +44,7 @@ class OrderService:
                 is_cliche=bool(item.get('is_cliche') or False),
                 notes=(str(item.get('notes')).strip() if item.get('notes') else None),
             )
-            total += Decimal(str(item.get('total_price') or '0'))
+            total += calculated_total
             self.db.add(li)
         # Assign using cast to satisfy type checker for Numeric field
         cast(Any, q).total_amount = float(total)
@@ -50,6 +58,8 @@ class OrderService:
             raise ValueError("Quotation not found")
         if quotation.client_order:
             raise ValueError("Quotation already converted")
+        if quotation.is_initial:
+            raise ValueError("Cannot convert initial quotation to order. Please specify quantities first.")
         order = ClientOrder(
             client_id=quotation.client_id,
             quotation_id=quotation.id,
@@ -65,7 +75,7 @@ class OrderService:
                 quotation_line_item_id=qli.id,
                 line_number=qli.line_number,
                 description=qli.description,
-                quantity=qli.quantity,
+                quantity=qli.quantity,  # Use original quantity string for order
                 unit_price=qli.unit_price,
                 total_price=qli.total_price,
                 length_mm=qli.length_mm,
@@ -155,6 +165,7 @@ class OrderService:
             'reference': quotation.reference,
             'issue_date': str(quotation.issue_date) if quotation.issue_date else '',
             'valid_until': str(quotation.valid_until) if quotation.valid_until else '',
+            'is_initial': quotation.is_initial,
             'client_name': client.name,
             'client_address': client_address,
             'client_phone': client.phone or '',

@@ -15,6 +15,9 @@ class ClientDialog(QDialog):
         self.name_edit = QLineEdit()
         self.contact_edit = QLineEdit()
         self.email_edit = QLineEdit()
+        self.phone_edit = QLineEdit()
+        self.address_edit = QLineEdit()
+        self.city_edit = QLineEdit()
         self._build()
 
     def _build(self):
@@ -38,10 +41,16 @@ class ClientDialog(QDialog):
         self.name_edit.setPlaceholderText("Ex: Emballages Distribution SARL")
         self.contact_edit.setPlaceholderText("Ex: Marie Martin")
         self.email_edit.setPlaceholderText("Ex: marie@emballages-distrib.fr")
+        self.phone_edit.setPlaceholderText("Ex: +213 21 XX XX XX")
+        self.address_edit.setPlaceholderText("Ex: 123 Rue des Industries")
+        self.city_edit.setPlaceholderText("Ex: Alger")
         
         form_layout.addRow('Nom de l\'entreprise:', self.name_edit)
         form_layout.addRow('Personne de contact:', self.contact_edit)
         form_layout.addRow('Email:', self.email_edit)
+        form_layout.addRow('Téléphone:', self.phone_edit)
+        form_layout.addRow('Adresse:', self.address_edit)
+        form_layout.addRow('Ville:', self.city_edit)
         
         layout.addWidget(form_frame)
         
@@ -64,8 +73,11 @@ class ClientDialog(QDialog):
     def get_data(self) -> dict:
         return {
             'name': self.name_edit.text().strip(),
-            'contact': self.contact_edit.text().strip(),
+            'contact_name': self.contact_edit.text().strip(),
             'email': self.email_edit.text().strip(),
+            'phone': self.phone_edit.text().strip(),
+            'address': self.address_edit.text().strip(),
+            'city': self.city_edit.text().strip(),
         }
 
 __all__ = ['ClientDialog']

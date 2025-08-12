@@ -10,7 +10,12 @@ def build_invoice_pdf(invoice_number: str, client_name: str, issue_date: date, i
     total_ht = Decimal('0')
     rows: list[list[str]] = []
     for it in items:
-        line_total = Decimal(str(it['unit_price'])) * it['quantity']
+        # Extract numeric quantity for calculations
+        import re
+        quantity_str = str(it['quantity'])
+        numbers = re.findall(r'\d+', quantity_str)
+        numeric_quantity = int(numbers[-1]) if numbers else 0
+        line_total = Decimal(str(it['unit_price'])) * numeric_quantity
         total_ht += line_total
         rows.append([
             it['description'],

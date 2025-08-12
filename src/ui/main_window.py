@@ -288,6 +288,7 @@ class MainWindow(QMainWindow):
                     client_id=data['client_id'],
                     issue_date=data['issue_date'],
                     valid_until=data['valid_until'],
+                    is_initial=data.get('is_initial', False),
                     notes=data['notes']
                 )
                 session.add(quotation)
@@ -297,14 +298,19 @@ class MainWindow(QMainWindow):
                 total_amount = Decimal('0')
                 for idx, item_data in enumerate(line_items_data, start=1):
                     unit_price = Decimal(str(item_data['unit_price']))
-                    quantity = item_data['quantity']
-                    total_price = unit_price * quantity
+                    quantity_str = str(item_data['quantity'])
+                    
+                    # Extract numeric quantity for calculations
+                    import re
+                    numbers = re.findall(r'\d+', quantity_str)
+                    numeric_quantity = int(numbers[-1]) if numbers else 0
+                    total_price = unit_price * numeric_quantity
                     
                     line_item = QuotationLineItem(
                         quotation_id=quotation.id,
                         line_number=idx,
                         description=item_data['description'],
-                        quantity=quantity,
+                        quantity=quantity_str,  # Store original string
                         unit_price=unit_price,
                         total_price=total_price,
                         length_mm=item_data.get('length_mm'),
@@ -331,14 +337,19 @@ class MainWindow(QMainWindow):
                 # Create order line items
                 for idx, item_data in enumerate(line_items_data, start=1):
                     unit_price = Decimal(str(item_data['unit_price']))
-                    quantity = item_data['quantity']
-                    total_price = unit_price * quantity
+                    quantity_str = str(item_data['quantity'])
+                    
+                    # Extract numeric quantity for calculations
+                    import re
+                    numbers = re.findall(r'\d+', quantity_str)
+                    numeric_quantity = int(numbers[-1]) if numbers else 0
+                    total_price = unit_price * numeric_quantity
                     
                     order_line_item = ClientOrderLineItem(
                         client_order_id=client_order.id,
                         line_number=idx,
                         description=item_data['description'],
-                        quantity=quantity,
+                        quantity=quantity_str,
                         unit_price=unit_price,
                         total_price=total_price,
                         length_mm=item_data.get('length_mm'),
@@ -476,14 +487,19 @@ class MainWindow(QMainWindow):
                 total_amount = Decimal('0')
                 for idx, item_data in enumerate(line_items_data, start=1):
                     unit_price = Decimal(str(item_data['unit_price']))
-                    quantity = item_data['quantity']
-                    total_price = unit_price * quantity
+                    quantity_str = str(item_data['quantity'])
+                    
+                    # Extract numeric quantity for calculations
+                    import re
+                    numbers = re.findall(r'\d+', quantity_str)
+                    numeric_quantity = int(numbers[-1]) if numbers else 0
+                    total_price = unit_price * numeric_quantity
                     
                     line_item = QuotationLineItem(
                         quotation_id=quotation.id,
                         line_number=idx,
                         description=item_data['description'],
-                        quantity=quantity,
+                        quantity=quantity_str,
                         unit_price=unit_price,
                         total_price=total_price,
                         length_mm=item_data.get('length_mm'),
@@ -499,7 +515,7 @@ class MainWindow(QMainWindow):
                         client_order_id=client_order.id,
                         line_number=idx,
                         description=item_data['description'],
-                        quantity=quantity,
+                        quantity=quantity_str,
                         unit_price=unit_price,
                         total_price=total_price,
                         length_mm=item_data.get('length_mm'),
@@ -610,6 +626,11 @@ class MainWindow(QMainWindow):
             client_order = session.get(ClientOrder, order_id)
             if not client_order:
                 QMessageBox.warning(self, 'Erreur', 'Commande introuvable')
+                return
+            
+            # Check if this is based on an initial quotation
+            if client_order.quotation and client_order.quotation.is_initial:
+                QMessageBox.warning(self, 'Attention', 'Impossible de créer une commande matières premières pour un devis initial. Veuillez d\'abord spécifier les quantités.')
                 return
                 
             suppliers = session.query(Supplier).all()

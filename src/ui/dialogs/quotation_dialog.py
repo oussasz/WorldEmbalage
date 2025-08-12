@@ -1,5 +1,5 @@
 from __future__ import annotations
-from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QLabel, QPushButton, QComboBox, QSpinBox, QTextEdit, QDateEdit, QFrame, QTableWidget
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLineEdit, QLabel, QPushButton, QComboBox, QSpinBox, QTextEdit, QDateEdit, QFrame, QTableWidget, QCheckBox
 from PyQt6.QtCore import QDate
 from decimal import Decimal
 from ui.styles import IconManager
@@ -50,6 +50,12 @@ class QuotationDialog(QDialog):
         
         self.valid_until_edit = QDateEdit(); self.valid_until_edit.setDate(QDate.currentDate().addDays(30))
         form_layout.addRow('Valide jusqu\'au:', self.valid_until_edit)
+        
+        # Initial Devis checkbox
+        self.initial_devis_check = QCheckBox('Devis Initial (sans quantités)')
+        self.initial_devis_check.setToolTip('Cochez cette option si les quantités ne sont pas encore définies')
+        self.initial_devis_check.toggled.connect(self._on_initial_devis_toggled)
+        form_layout.addRow('', self.initial_devis_check)
         
         layout.addWidget(form_frame)
 
@@ -125,6 +131,28 @@ class QuotationDialog(QDialog):
         # Add one default row
         self._add_item_row()
 
+    def _on_initial_devis_toggled(self, checked: bool):
+        """Handle initial devis checkbox toggle"""
+        from PyQt6.QtWidgets import QLineEdit
+        
+        for row in range(self.items_table.rowCount()):
+            qty_widget = self.items_table.cellWidget(row, 7)  # Quantity column
+            total_widget = self.items_table.cellWidget(row, 9)  # Total column
+            
+            if isinstance(qty_widget, QLineEdit):
+                qty_widget.setEnabled(not checked)
+                if checked:
+                    qty_widget.setText("N/A")
+                else:
+                    qty_widget.setText("100")
+            
+            if isinstance(total_widget, QLineEdit):
+                total_widget.setEnabled(not checked)
+                if checked:
+                    total_widget.setText("N/A")
+                else:
+                    self._recalc_row_total(row)
+
     def _add_item_row(self):
         from PyQt6.QtWidgets import QLineEdit, QComboBox
         from models.orders import BoxColor
@@ -151,16 +179,26 @@ class QuotationDialog(QDialog):
         cliche = QComboBox(); cliche.addItems(['Sans', 'Avec']); self.items_table.setCellWidget(row, 6, cliche)
         
         # Quantité
-        qty = QSpinBox(); qty.setRange(1, 100000); qty.setValue(100); self.items_table.setCellWidget(row, 7, qty)
+        qty = QLineEdit(); qty.setPlaceholderText('Ex: 1000 ou >1000'); 
+        if self.initial_devis_check.isChecked():
+            qty.setText('N/A')
+            qty.setEnabled(False)
+        else:
+            qty.setText('100')
+        self.items_table.setCellWidget(row, 7, qty)
         
         # PU
         unit = QLineEdit(); unit.setPlaceholderText('0.00'); unit.setText('50.00'); self.items_table.setCellWidget(row, 8, unit)
         
         # Total (read-only)
-        total = QLineEdit(); total.setReadOnly(True); self.items_table.setCellWidget(row, 9, total)
+        total = QLineEdit(); total.setReadOnly(True)
+        if self.initial_devis_check.isChecked():
+            total.setText('N/A')
+            total.setEnabled(False)
+        self.items_table.setCellWidget(row, 9, total)
         
         # Recalculate
-        qty.valueChanged.connect(lambda _v, r=row: self._recalc_row_total(r))
+        qty.textChanged.connect(lambda _v, r=row: self._recalc_row_total(r))
         unit.textChanged.connect(lambda _t, r=row: self._recalc_row_total(r))
         self._recalc_row_total(row)
 
@@ -173,16 +211,20 @@ class QuotationDialog(QDialog):
 
     def _recalc_row_total(self, row: int):
         from PyQt6.QtWidgets import QLineEdit
+        import re
         qty_w = self.items_table.cellWidget(row, 7)
         unit_w = self.items_table.cellWidget(row, 8)
         total_w = self.items_table.cellWidget(row, 9)
         try:
-            qty = qty_w.value() if isinstance(qty_w, QSpinBox) else 0
+            qty_text = qty_w.text() if isinstance(qty_w, QLineEdit) else '0'
+            numbers = re.findall(r'\d+', qty_text)
+            qty = int(numbers[-1]) if numbers else 0
+            
             unit_txt = unit_w.text() if isinstance(unit_w, QLineEdit) else '0'
-            unit = Decimal(unit_txt or '0')
+            unit = Decimal(unit_txt.replace(',', '.') or '0')
             total = unit * qty
             if isinstance(total_w, QLineEdit): total_w.setText(f"{total:.2f}")
-        except Exception:
+        except (ValueError, TypeError, Exception):
             if isinstance(total_w, QLineEdit): total_w.setText('0.00')
 
     def get_data(self) -> dict:
@@ -207,12 +249,25 @@ class QuotationDialog(QDialog):
             col = color.currentData() if isinstance(color, QComboBox) else BoxColor.BLANC
             t = ctype.text().strip() if isinstance(ctype, QLineEdit) else ''
             is_cliche = cliche.currentIndex() == 1 if isinstance(cliche, QComboBox) else False
-            q = qty.value() if isinstance(qty, QSpinBox) else 0
+            q = qty.text().strip() if isinstance(qty, QLineEdit) else '0'
+            # Handle N/A quantities for initial devis
+            if q == 'N/A':
+                q = '0'
             try:
-                pu = Decimal(unit.text() if isinstance(unit, QLineEdit) else '0')
+                unit_text = unit.text().strip().replace(',', '.') if isinstance(unit, QLineEdit) else '0'
+                pu = Decimal(unit_text or '0')
             except Exception:
                 pu = Decimal('0')
-            total = pu * q
+
+            import re
+            numbers = re.findall(r'\d+', q)
+            numeric_q = int(numbers[-1]) if numbers else 0
+            
+            # For initial devis, don't calculate total
+            if self.initial_devis_check.isChecked():
+                total = Decimal('0')
+            else:
+                total = pu * numeric_q
             items.append({
                 'description': d,
                 'length_mm': L,
@@ -230,6 +285,7 @@ class QuotationDialog(QDialog):
             'client_id': self.client_combo.currentData(),
             'issue_date': self.issue_date_edit.date().toPyDate(),
             'valid_until': self.valid_until_edit.date().toPyDate(),
+            'is_initial': self.initial_devis_check.isChecked(),
             'line_items': items,
             'notes': self.notes_edit.toPlainText().strip()
         }

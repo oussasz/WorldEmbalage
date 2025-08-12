@@ -1,9 +1,9 @@
 """Generic Alembic revision script."""
 from __future__ import annotations
 revision = 'd7b149c98edd'
-down_revision = 'None'
-branch_labels = 'None'
-depends_on = 'None'
+down_revision = None
+branch_labels = None
+depends_on = None
 
 from alembic import op
 import sqlalchemy as sa

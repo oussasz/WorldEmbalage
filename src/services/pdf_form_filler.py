@@ -194,21 +194,47 @@ class PDFFormFiller:
 
             # Line items table
             if 'line_items' in data:
-                table_data = [["Description", "Qté", "P.U.", "Total"]]
+                is_initial = data.get('is_initial', False)
+                
+                if is_initial:
+                    table_data = [["Description", "Couleur", "Cliché", "Type", "UTTC"]]
+                else:
+                    table_data = [["Description", "Couleur", "Cliché", "Qté", "UTTC", "Total"]]
+                
                 total = Decimal('0')
                 
                 for item in data['line_items']:
-                    line_total = Decimal(str(item.get('unit_price', 0))) * Decimal(str(item.get('quantity', 0)))
-                    table_data.append([
-                        str(item.get('description', '')),
-                        str(item.get('quantity', '')),
-                        f"{item.get('unit_price', 0):.2f}",
-                        f"{line_total:.2f}"
-                    ])
-                    total += line_total
+                    # Extract numeric quantity for calculations
+                    import re
+                    quantity_str = str(item.get('quantity', '0'))
+                    numbers = re.findall(r'\d+', quantity_str)
+                    numeric_quantity = int(numbers[-1]) if numbers else 0
+                    
+                    line_total = Decimal(str(item.get('unit_price', 0))) * Decimal(str(numeric_quantity))
+                    cliche_status = "Oui" if item.get('is_cliche') else "Non"
+                    
+                    if is_initial:
+                        # For initial devis, don't show quantity and total
+                        table_data.append([
+                            str(item.get('description', '')),
+                            str(item.get('color', '')),
+                            cliche_status,
+                            str(item.get('cardboard_type', '')),
+                            f"{item.get('unit_price', 0):.2f}"
+                        ])
+                    else:
+                        table_data.append([
+                            str(item.get('description', '')),
+                            str(item.get('color', '')),
+                            cliche_status,
+                            str(item.get('quantity', '')),  # Display original quantity string
+                            f"{item.get('unit_price', 0):.2f}",
+                            f"{line_total:.2f}"
+                        ])
+                        total += line_total
 
                 # Create and style the table
-                table = Table(table_data, colWidths=[250, 50, 70, 80])
+                table = Table(table_data, colWidths=[180, 60, 50, 50, 70, 80])
                 style = TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0D47A1")),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -225,15 +251,14 @@ class PDFFormFiller:
                 table.wrapOn(c, width, height)
                 table.drawOn(c, 60, height - 370)
 
-                # Total
-                c.setFont("Helvetica-Bold", 10)
-                c.drawString(400, height - 450 - 30, f"TOTAL: {total:.2f} DA")
+                # Total (only show for non-initial devis)
+                if not data.get('is_initial', False):
+                    c.setFont("Helvetica-Bold", 10)
+                    c.drawString(400, height - 450 - 30, f"TOTAL: {total:.2f} DA")
+                else:
+                    c.setFont("Helvetica-Oblique", 9)
+                    c.drawString(400, height - 450 - 30, "Devis Initial - Quantités à définir")
 
-            # Notes
-            if 'notes' in data and data['notes']:
-                c.setFont("Helvetica", 9)
-                c.drawString(50, 150, f"Notes: {data['notes']}")
-            
             c.showPage()
             c.save()
             

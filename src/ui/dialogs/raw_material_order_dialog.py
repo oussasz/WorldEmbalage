@@ -177,7 +177,7 @@ class RawMaterialOrderDialog(QDialog):
                     'rabat': rabat
                 })
                 
-                total_quantity += line_item.quantity
+                total_quantity += line_item.numeric_quantity
                 max_length = max(max_length, plaque_length)
                 max_width = max(max_width, plaque_width)
                 max_rabat = max(max_rabat, rabat)

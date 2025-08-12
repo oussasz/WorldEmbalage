@@ -82,6 +82,7 @@ class Quotation(PKMixin, TimestampMixin, Base):
     valid_until: Mapped[Date | None] = mapped_column(Date)
     total_amount: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     currency: Mapped[str] = mapped_column(String(3), default='DZD')
+    is_initial: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     notes: Mapped[str | None] = mapped_column(Text())
 
     client: Mapped['Client'] = relationship(back_populates='quotations')  # type: ignore[name-defined]
@@ -95,7 +96,7 @@ class QuotationLineItem(PKMixin, TimestampMixin, Base):
     quotation_id: Mapped[int] = mapped_column(ForeignKey('quotations.id', ondelete='CASCADE'), nullable=False, index=True)
     line_number: Mapped[int] = mapped_column(Integer, nullable=False)  # ordre dans le devis
     description: Mapped[str | None] = mapped_column(String(255))  # description libre
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    quantity: Mapped[str] = mapped_column(String(100), nullable=False, default='1')
     unit_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     
@@ -110,6 +111,13 @@ class QuotationLineItem(PKMixin, TimestampMixin, Base):
     notes: Mapped[str | None] = mapped_column(Text())
 
     quotation: Mapped['Quotation'] = relationship(back_populates='line_items')
+
+    @property
+    def numeric_quantity(self) -> int:
+        """Extracts the numeric part of the quantity string for calculations."""
+        import re
+        numbers = re.findall(r'\d+', self.quantity)
+        return int(numbers[-1]) if numbers else 0
 
 
 class ClientOrder(PKMixin, TimestampMixin, Base):
@@ -140,7 +148,7 @@ class ClientOrderLineItem(PKMixin, TimestampMixin, Base):
     quotation_line_item_id: Mapped[int | None] = mapped_column(ForeignKey('quotation_line_items.id', ondelete='SET NULL'), index=True)
     line_number: Mapped[int] = mapped_column(Integer, nullable=False)  # ordre dans la commande
     description: Mapped[str | None] = mapped_column(String(255))  # description libre
-    quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    quantity: Mapped[str] = mapped_column(String(100), nullable=False, default='1')
     unit_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     total_price: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     
@@ -156,6 +164,13 @@ class ClientOrderLineItem(PKMixin, TimestampMixin, Base):
 
     client_order: Mapped['ClientOrder'] = relationship(back_populates='line_items')
     quotation_line_item: Mapped['QuotationLineItem'] = relationship()
+
+    @property
+    def numeric_quantity(self) -> int:
+        """Extracts the numeric part of the quantity string for calculations."""
+        import re
+        numbers = re.findall(r'\d+', self.quantity)
+        return int(numbers[-1]) if numbers else 0
 
 
 class Delivery(PKMixin, TimestampMixin, Base):
