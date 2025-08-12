@@ -95,4 +95,74 @@ class OrderService:
     def list_orders(self) -> list[ClientOrder]:
         return list(self.db.scalars(select(ClientOrder)).all())
 
+    def get_quotation_for_pdf(self, quotation_id: int) -> dict[str, Any]:
+        """
+        Get complete quotation data formatted for PDF generation.
+        
+        Args:
+            quotation_id: ID of the quotation
+            
+        Returns:
+            Dictionary containing all quotation data for PDF
+        """
+        quotation = self.db.get(Quotation, quotation_id)
+        if not quotation:
+            raise ValueError("Quotation not found")
+        
+        # Get client information
+        client = quotation.client
+        
+        # Prepare line items data
+        line_items = []
+        total_amount = Decimal('0')
+        
+        for item in quotation.line_items:
+            line_data = {
+                'description': item.description,
+                'quantity': item.quantity,
+                'unit_price': float(Decimal(str(item.unit_price))),
+                'total_price': float(Decimal(str(item.total_price))),
+            }
+            
+            # Add dimensions if available
+            if item.length_mm and item.width_mm and item.height_mm:
+                line_data['dimensions'] = f"{item.length_mm} x {item.width_mm} x {item.height_mm} mm"
+            
+            # Add other details if available
+            if item.color:
+                line_data['color'] = item.color.value
+            if item.cardboard_type:
+                line_data['cardboard_type'] = item.cardboard_type
+            if item.is_cliche:
+                line_data['is_cliche'] = True
+            if item.notes:
+                line_data['item_notes'] = item.notes
+            
+            line_items.append(line_data)
+            total_amount += Decimal(str(item.total_price))
+        
+        # Prepare client address
+        client_address_parts = []
+        if client.address:
+            client_address_parts.append(client.address)
+        if client.city:
+            client_address_parts.append(client.city)
+        # Note: postal_code is not in Client model
+        
+        client_address = ", ".join(client_address_parts) if client_address_parts else ""
+        
+        return {
+            'reference': quotation.reference,
+            'issue_date': str(quotation.issue_date) if quotation.issue_date else '',
+            'valid_until': str(quotation.valid_until) if quotation.valid_until else '',
+            'client_name': client.name,
+            'client_address': client_address,
+            'client_phone': client.phone or '',
+            'client_email': client.email or '',
+            'line_items': line_items,
+            'total_amount': float(total_amount),
+            'notes': quotation.notes or '',
+            'currency': quotation.currency
+        }
+
 __all__ = ['OrderService']

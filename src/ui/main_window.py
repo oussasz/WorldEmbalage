@@ -1,6 +1,9 @@
 from __future__ import annotations
 import datetime
+import os
+import subprocess
 from decimal import Decimal
+from pathlib import Path
 from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QMenuBar, QMenu, QMessageBox, QTabWidget, QToolBar, QLineEdit, QStatusBar, QDialog
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtCore import Qt
@@ -20,6 +23,8 @@ from ui.dialogs.production_dialog import ProductionDialog
 from ui.widgets.data_grid import DataGrid
 from ui.widgets.dashboard import Dashboard
 from ui.styles import IconManager
+from services.order_service import OrderService
+from services.pdf_form_filler import PDFFormFiller, PDFFillError
 from typing import cast, Any
 from models.orders import QuotationLineItem, ClientOrderLineItem
 
@@ -171,6 +176,7 @@ class MainWindow(QMainWindow):
         """Setup context menus for data grids"""
         # Orders context menu
         self.orders_grid.add_context_action("edit", "✏️ Modifier devis")
+        self.orders_grid.add_context_action("print", "🖨️ Imprimer devis")
         self.orders_grid.add_context_action("delete", "🗑️ Supprimer devis")
         self.orders_grid.add_context_action("create_supplier_order", "📦 Créer commande matières")
         
@@ -196,6 +202,8 @@ class MainWindow(QMainWindow):
         
         if action_name == "edit":
             self._edit_quotation_by_id(order_id, reference)
+        elif action_name == "print":
+            self._print_quotation_by_id(order_id, reference)
         elif action_name == "delete":
             self._delete_quotation_by_id(order_id, reference)
         elif action_name == "create_supplier_order":
@@ -517,6 +525,52 @@ class MainWindow(QMainWindow):
         except Exception as e:
             session.rollback()
             QMessageBox.critical(self, 'Erreur', f'Erreur lors de la modification: {str(e)}')
+        finally:
+            session.close()
+
+    def _print_quotation_by_id(self, order_id: int, reference: str):
+        """Print quotation by generating PDF from template"""
+        session = SessionLocal()
+        try:
+            client_order = session.get(ClientOrder, order_id)
+            if not client_order or not client_order.quotation:
+                QMessageBox.warning(self, 'Erreur', 'Devis introuvable')
+                return
+            
+            # Get quotation data for PDF
+            order_service = OrderService(session)
+            quotation_data = order_service.get_quotation_for_pdf(client_order.quotation.id)
+            
+            # Generate PDF using template
+            pdf_filler = PDFFormFiller()
+            try:
+                output_path = pdf_filler.fill_devis_template(quotation_data)
+                
+                # Try to open the PDF with default system viewer
+                if output_path.exists():
+                    if os.name == 'nt':  # Windows
+                        os.startfile(str(output_path))
+                    elif os.name == 'posix':  # Linux/Unix
+                        subprocess.run(['xdg-open', str(output_path)], check=False)
+                    else:  # macOS
+                        subprocess.run(['open', str(output_path)], check=False)
+                    
+                    QMessageBox.information(
+                        self, 
+                        'Succès', 
+                        f'PDF généré avec succès:\n{output_path.name}\n\nEmplacement: {output_path.parent}'
+                    )
+                    self.dashboard.add_activity("P", f"PDF généré: {reference}", "#28A745")
+                else:
+                    QMessageBox.warning(self, 'Erreur', 'Le fichier PDF n\'a pas pu être créé')
+                    
+            except PDFFillError as e:
+                QMessageBox.critical(self, 'Erreur PDF', f'Erreur lors de la génération du PDF:\n{str(e)}')
+            except Exception as e:
+                QMessageBox.critical(self, 'Erreur', f'Erreur inattendue:\n{str(e)}')
+                
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la récupération des données:\n{str(e)}')
         finally:
             session.close()
 
