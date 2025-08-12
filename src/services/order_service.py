@@ -134,9 +134,17 @@ class OrderService:
                 'total_price': float(Decimal(str(item.total_price))),
             }
             
-            # Add dimensions if available
+            # Add individual dimensions
+            if item.length_mm:
+                line_data['length_mm'] = item.length_mm
+            if item.width_mm:
+                line_data['width_mm'] = item.width_mm
+            if item.height_mm:
+                line_data['height_mm'] = item.height_mm
+            
+            # Add formatted dimensions if available
             if item.length_mm and item.width_mm and item.height_mm:
-                line_data['dimensions'] = f"{item.length_mm} x {item.width_mm} x {item.height_mm} mm"
+                line_data['dimensions'] = f"{item.length_mm} × {item.width_mm} × {item.height_mm}"
             
             # Add other details if available
             if item.color:

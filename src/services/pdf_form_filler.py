@@ -197,9 +197,9 @@ class PDFFormFiller:
                 is_initial = data.get('is_initial', False)
                 
                 if is_initial:
-                    table_data = [["Description", "Couleur", "Cliché", "Quantité Min.", "UTTC"]]
+                    table_data = [["Description", "Dimensions", "Couleur", "Cliché", "Quantité Min.", "UTTC"]]
                 else:
-                    table_data = [["Description", "Couleur", "Cliché", "Qté", "UTTC", "Total"]]
+                    table_data = [["Description", "Dimensions", "Couleur", "Cliché", "Qté", "UTTC", "Total"]]
                 
                 total = Decimal('0')
                 
@@ -213,10 +213,17 @@ class PDFFormFiller:
                     line_total = Decimal(str(item.get('unit_price', 0))) * Decimal(str(numeric_quantity))
                     cliche_status = "Oui" if item.get('is_cliche') else "Non"
                     
+                    # Get dimensions from the item data
+                    dimensions = item.get('dimensions', '')
+                    if not dimensions and item.get('length_mm') and item.get('width_mm') and item.get('height_mm'):
+                        # Fallback: calculate if not provided
+                        dimensions = f"{item['length_mm']} × {item['width_mm']} × {item['height_mm']}"
+                    
                     if is_initial:
                         # For initial devis, show minimum quantity
                         table_data.append([
                             str(item.get('description', '')),
+                            dimensions,
                             str(item.get('color', '')),
                             cliche_status,
                             str(item.get('quantity', '')),  # Display "à partir de X"
@@ -225,6 +232,7 @@ class PDFFormFiller:
                     else:
                         table_data.append([
                             str(item.get('description', '')),
+                            dimensions,
                             str(item.get('color', '')),
                             cliche_status,
                             str(item.get('quantity', '')),  # Display original quantity string
@@ -234,15 +242,26 @@ class PDFFormFiller:
                         total += line_total
 
                 # Create and style the table
-                table = Table(table_data, colWidths=[180, 60, 50, 50, 70, 80])
+                if is_initial:
+                    # Column widths for initial devis: Description, Dimensions, Couleur, Cliché, Quantité Min., UTTC
+                    table = Table(table_data, colWidths=[110, 100, 45, 45, 85, 45])
+                else:
+                    # Column widths for regular devis: Description, Dimensions, Couleur, Cliché, Qté, UTTC, Total
+                    table = Table(table_data, colWidths=[90, 90, 35, 35, 55, 35, 45])
                 style = TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0D47A1")),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
                     ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
                     ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 8),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                    ('TOPPADDING', (0, 1), (-1, -1), 6),
+                    ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
                     ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#BBDEFB")]),
-                    ('GRID', (0, 0), (-1, -1), 1, colors.black)
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                    ('WORDWRAP', (0, 0), (-1, -1), True)
                 ])
 
                 table.setStyle(style)

@@ -11,7 +11,7 @@ class QuotationDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle('Nouveau Devis')
         self.setWindowIcon(IconManager.get_quotation_icon())
-        self.setMinimumWidth(800)
+        self.setMinimumWidth(1000)  # Increased width to accommodate dimensions column
         self.setModal(True)
         self.clients = clients
         self._build()
@@ -89,10 +89,10 @@ class QuotationDialog(QDialog):
 
     def _create_items_table(self, layout):
         from PyQt6.QtWidgets import QTableWidgetItem
-        # 10 columns: Description, L, l, H, Couleur, Type, Cliché, Quantité, PU, Total
-        self.items_table = QTableWidget(0, 10)
+        # 11 columns: Description, L, l, H, Dimensions, Couleur, Type, Cliché, Quantité, PU, Total
+        self.items_table = QTableWidget(0, 11)
         self.items_table.setHorizontalHeaderLabels([
-            'Description', 'L (mm)', 'l (mm)', 'H (mm)', 'Couleur', 'Type carton', 'Cliché', 'Quantité', 'PU (DA)', 'Total (DA)'
+            'Description', 'L (mm)', 'l (mm)', 'H (mm)', 'Dimensions', 'Couleur', 'Type carton', 'Cliché', 'Quantité', 'PU (DA)', 'Total (DA)'
         ])
         
         # Set minimum row height for better visibility
@@ -104,27 +104,31 @@ class QuotationDialog(QDialog):
         
         header = self.items_table.horizontalHeader()
         if header is not None:
-            # Set specific column widths for better display
-            header.setSectionResizeMode(0, header.ResizeMode.Interactive)
-            header.setSectionResizeMode(1, header.ResizeMode.Interactive)
-            header.setSectionResizeMode(2, header.ResizeMode.Interactive)
-            header.setSectionResizeMode(3, header.ResizeMode.Interactive)
-            header.setSectionResizeMode(4, header.ResizeMode.Interactive)
-            header.setSectionResizeMode(5, header.ResizeMode.Interactive)
-            header.setSectionResizeMode(6, header.ResizeMode.Interactive)
-            header.setSectionResizeMode(7, header.ResizeMode.Interactive)
-            header.setSectionResizeMode(8, header.ResizeMode.Interactive)
-            header.setSectionResizeMode(9, header.ResizeMode.Interactive)
-            header.resizeSection(0, 180)  # Description
-            header.resizeSection(1, 80)   # L (mm)
-            header.resizeSection(2, 80)   # l (mm)
-            header.resizeSection(3, 80)   # H (mm)
-            header.resizeSection(4, 90)   # Couleur
-            header.resizeSection(5, 160)  # Type carton
-            header.resizeSection(6, 90)   # Cliché
-            header.resizeSection(7, 90)   # Quantité
-            header.resizeSection(8, 90)   # PU (DA)
-            header.resizeSection(9, 100)  # Total (DA)
+            # Set specific column widths for better display and ensure all text is visible
+            header.setSectionResizeMode(0, header.ResizeMode.Interactive)  # Description
+            header.setSectionResizeMode(1, header.ResizeMode.Interactive)  # L (mm)
+            header.setSectionResizeMode(2, header.ResizeMode.Interactive)  # l (mm)
+            header.setSectionResizeMode(3, header.ResizeMode.Interactive)  # H (mm)
+            header.setSectionResizeMode(4, header.ResizeMode.Interactive)  # Dimensions
+            header.setSectionResizeMode(5, header.ResizeMode.Interactive)  # Couleur
+            header.setSectionResizeMode(6, header.ResizeMode.Interactive)  # Type carton
+            header.setSectionResizeMode(7, header.ResizeMode.Interactive)  # Cliché
+            header.setSectionResizeMode(8, header.ResizeMode.Interactive)  # Quantité
+            header.setSectionResizeMode(9, header.ResizeMode.Interactive)  # PU (DA)
+            header.setSectionResizeMode(10, header.ResizeMode.Interactive) # Total (DA)
+            
+            # Set optimal column widths to fit content
+            header.resizeSection(0, 150)  # Description
+            header.resizeSection(1, 60)   # L (mm)
+            header.resizeSection(2, 60)   # l (mm)
+            header.resizeSection(3, 60)   # H (mm)
+            header.resizeSection(4, 100)  # Dimensions
+            header.resizeSection(5, 70)   # Couleur
+            header.resizeSection(6, 120)  # Type carton
+            header.resizeSection(7, 60)   # Cliché
+            header.resizeSection(8, 110)  # Quantité
+            header.resizeSection(9, 70)   # PU (DA)
+            header.resizeSection(10, 80)  # Total (DA)
             header.setStretchLastSection(False)
         layout.addWidget(self.items_table)
         
@@ -152,8 +156,8 @@ class QuotationDialog(QDialog):
             self.min_qty_edit.textChanged.disconnect()
         
         for row in range(self.items_table.rowCount()):
-            qty_widget = self.items_table.cellWidget(row, 7)  # Quantity column
-            total_widget = self.items_table.cellWidget(row, 9)  # Total column
+            qty_widget = self.items_table.cellWidget(row, 8)  # Quantity column (updated index)
+            total_widget = self.items_table.cellWidget(row, 10)  # Total column (updated index)
             
             if isinstance(qty_widget, QLineEdit):
                 qty_widget.setEnabled(not checked)
@@ -180,9 +184,30 @@ class QuotationDialog(QDialog):
         min_qty = self.min_qty_edit.text() or "500"
         
         for row in range(self.items_table.rowCount()):
-            qty_widget = self.items_table.cellWidget(row, 7)  # Quantity column
+            qty_widget = self.items_table.cellWidget(row, 8)  # Quantity column (updated index)
             if isinstance(qty_widget, QLineEdit):
                 qty_widget.setText(f"à partir de {min_qty}")
+
+    def _update_dimensions(self, row: int):
+        """Update the dimensions display for a specific row"""
+        from PyQt6.QtWidgets import QLineEdit, QSpinBox
+        
+        length_widget = self.items_table.cellWidget(row, 1)
+        width_widget = self.items_table.cellWidget(row, 2)
+        height_widget = self.items_table.cellWidget(row, 3)
+        dims_widget = self.items_table.cellWidget(row, 4)
+        
+        if (isinstance(length_widget, QSpinBox) and isinstance(width_widget, QSpinBox) and 
+            isinstance(height_widget, QSpinBox) and isinstance(dims_widget, QLineEdit)):
+            
+            L = length_widget.value()
+            l = width_widget.value()
+            H = height_widget.value()
+            
+            if L > 0 and l > 0 and H > 0:
+                dims_widget.setText(f"{L} × {l} × {H}")
+            else:
+                dims_widget.setText("")
 
     def _add_item_row(self):
         from PyQt6.QtWidgets import QLineEdit, QComboBox
@@ -199,15 +224,19 @@ class QuotationDialog(QDialog):
         self.items_table.setCellWidget(row, 2, sb(200))
         self.items_table.setCellWidget(row, 3, sb(150))
         
+        # Dimensions (auto-calculated, read-only)
+        dims = QLineEdit(); dims.setReadOnly(True); dims.setStyleSheet("background-color: #F8F9FA; color: #495057;")
+        self.items_table.setCellWidget(row, 4, dims)
+        
         # Couleur
         color = QComboBox(); color.addItem('Blanc', BoxColor.BLANC); color.addItem('Brun', BoxColor.BRUN)
-        self.items_table.setCellWidget(row, 4, color)
+        self.items_table.setCellWidget(row, 5, color)
         
         # Type carton
-        ctype = QLineEdit(); ctype.setPlaceholderText('Ex: Double cannelure BC 7mm'); self.items_table.setCellWidget(row, 5, ctype)
+        ctype = QLineEdit(); ctype.setPlaceholderText('Ex: Double cannelure BC 7mm'); self.items_table.setCellWidget(row, 6, ctype)
         
         # Cliché
-        cliche = QComboBox(); cliche.addItems(['Sans', 'Avec']); self.items_table.setCellWidget(row, 6, cliche)
+        cliche = QComboBox(); cliche.addItems(['Sans', 'Avec']); self.items_table.setCellWidget(row, 7, cliche)
         
         # Quantité
         qty = QLineEdit(); qty.setPlaceholderText('Ex: 1000 ou >1000'); 
@@ -217,22 +246,36 @@ class QuotationDialog(QDialog):
             qty.setEnabled(False)
         else:
             qty.setText('100')
-        self.items_table.setCellWidget(row, 7, qty)
+        self.items_table.setCellWidget(row, 8, qty)
         
         # PU
-        unit = QLineEdit(); unit.setPlaceholderText('0.00'); unit.setText('50.00'); self.items_table.setCellWidget(row, 8, unit)
+        unit = QLineEdit(); unit.setPlaceholderText('0.00'); unit.setText('50.00'); self.items_table.setCellWidget(row, 9, unit)
         
         # Total (read-only)
         total = QLineEdit(); total.setReadOnly(True)
         if self.initial_devis_check.isChecked():
             total.setText('N/A')
             total.setEnabled(False)
-        self.items_table.setCellWidget(row, 9, total)
+        self.items_table.setCellWidget(row, 10, total)
         
         # Recalculate
         qty.textChanged.connect(lambda _v, r=row: self._recalc_row_total(r))
         unit.textChanged.connect(lambda _t, r=row: self._recalc_row_total(r))
+        
+        # Update dimensions when L, l, H change
+        length_widget = self.items_table.cellWidget(row, 1)
+        width_widget = self.items_table.cellWidget(row, 2)
+        height_widget = self.items_table.cellWidget(row, 3)
+        
+        if isinstance(length_widget, QSpinBox):
+            length_widget.valueChanged.connect(lambda _v, r=row: self._update_dimensions(r))
+        if isinstance(width_widget, QSpinBox):
+            width_widget.valueChanged.connect(lambda _v, r=row: self._update_dimensions(r))
+        if isinstance(height_widget, QSpinBox):
+            height_widget.valueChanged.connect(lambda _v, r=row: self._update_dimensions(r))
+        
         self._recalc_row_total(row)
+        self._update_dimensions(row)
 
     def _remove_selected_rows(self):
         selected_rows = sorted({idx.row() for idx in self.items_table.selectedIndexes()}, reverse=True)
@@ -244,9 +287,9 @@ class QuotationDialog(QDialog):
     def _recalc_row_total(self, row: int):
         from PyQt6.QtWidgets import QLineEdit
         import re
-        qty_w = self.items_table.cellWidget(row, 7)
-        unit_w = self.items_table.cellWidget(row, 8)
-        total_w = self.items_table.cellWidget(row, 9)
+        qty_w = self.items_table.cellWidget(row, 8)  # Updated quantity column index
+        unit_w = self.items_table.cellWidget(row, 9)  # Updated unit price column index
+        total_w = self.items_table.cellWidget(row, 10)  # Updated total column index
         try:
             qty_text = qty_w.text() if isinstance(qty_w, QLineEdit) else '0'
             numbers = re.findall(r'\d+', qty_text)
@@ -268,16 +311,18 @@ class QuotationDialog(QDialog):
             length = self.items_table.cellWidget(r, 1)
             width = self.items_table.cellWidget(r, 2)
             height = self.items_table.cellWidget(r, 3)
-            color = self.items_table.cellWidget(r, 4)
-            ctype = self.items_table.cellWidget(r, 5)
-            cliche = self.items_table.cellWidget(r, 6)
-            qty = self.items_table.cellWidget(r, 7)
-            unit = self.items_table.cellWidget(r, 8)
+            dims = self.items_table.cellWidget(r, 4)  # Dimensions (read-only)
+            color = self.items_table.cellWidget(r, 5)
+            ctype = self.items_table.cellWidget(r, 6)
+            cliche = self.items_table.cellWidget(r, 7)
+            qty = self.items_table.cellWidget(r, 8)
+            unit = self.items_table.cellWidget(r, 9)
             # extract values safely
             d = desc.text().strip() if isinstance(desc, QLineEdit) else ''
             L = length.value() if isinstance(length, QSpinBox) else 0
             l = width.value() if isinstance(width, QSpinBox) else 0
             H = height.value() if isinstance(height, QSpinBox) else 0
+            dimensions_text = dims.text().strip() if isinstance(dims, QLineEdit) else ''
             col = color.currentData() if isinstance(color, QComboBox) else BoxColor.BLANC
             t = ctype.text().strip() if isinstance(ctype, QLineEdit) else ''
             is_cliche = cliche.currentIndex() == 1 if isinstance(cliche, QComboBox) else False
@@ -307,6 +352,7 @@ class QuotationDialog(QDialog):
                 'length_mm': L,
                 'width_mm': l,
                 'height_mm': H,
+                'dimensions': dimensions_text,
                 'color': col,
                 'cardboard_type': t,
                 'is_cliche': is_cliche,
