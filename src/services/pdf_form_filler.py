@@ -197,7 +197,7 @@ class PDFFormFiller:
                 is_initial = data.get('is_initial', False)
                 
                 if is_initial:
-                    table_data = [["Description", "Couleur", "Cliché", "Type", "UTTC"]]
+                    table_data = [["Description", "Couleur", "Cliché", "Quantité Min.", "UTTC"]]
                 else:
                     table_data = [["Description", "Couleur", "Cliché", "Qté", "UTTC", "Total"]]
                 
@@ -214,12 +214,12 @@ class PDFFormFiller:
                     cliche_status = "Oui" if item.get('is_cliche') else "Non"
                     
                     if is_initial:
-                        # For initial devis, don't show quantity and total
+                        # For initial devis, show minimum quantity
                         table_data.append([
                             str(item.get('description', '')),
                             str(item.get('color', '')),
                             cliche_status,
-                            str(item.get('cardboard_type', '')),
+                            str(item.get('quantity', '')),  # Display "à partir de X"
                             f"{item.get('unit_price', 0):.2f}"
                         ])
                     else:
@@ -257,7 +257,7 @@ class PDFFormFiller:
                     c.drawString(400, height - 450 - 30, f"TOTAL: {total:.2f} DA")
                 else:
                     c.setFont("Helvetica-Oblique", 9)
-                    c.drawString(400, height - 450 - 30, "Devis Initial - Quantités à définir")
+                    c.drawString(400, height - 450 - 30, "Devis Initial - Quantités minimales indiquées")
 
             c.showPage()
             c.save()

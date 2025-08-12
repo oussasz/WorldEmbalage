@@ -52,10 +52,17 @@ class QuotationDialog(QDialog):
         form_layout.addRow('Valide jusqu\'au:', self.valid_until_edit)
         
         # Initial Devis checkbox
-        self.initial_devis_check = QCheckBox('Devis Initial (sans quantités)')
-        self.initial_devis_check.setToolTip('Cochez cette option si les quantités ne sont pas encore définies')
+        self.initial_devis_check = QCheckBox('Devis Initial (quantités minimales)')
+        self.initial_devis_check.setToolTip('Cochez cette option pour spécifier des quantités minimales')
         self.initial_devis_check.toggled.connect(self._on_initial_devis_toggled)
         form_layout.addRow('', self.initial_devis_check)
+        
+        # Minimum quantity input (only visible when initial devis is checked)
+        self.min_qty_edit = QLineEdit()
+        self.min_qty_edit.setPlaceholderText('Ex: 500')
+        self.min_qty_edit.setText('500')
+        self.min_qty_edit.setVisible(False)
+        form_layout.addRow('Quantité minimale:', self.min_qty_edit)
         
         layout.addWidget(form_frame)
 
@@ -135,6 +142,15 @@ class QuotationDialog(QDialog):
         """Handle initial devis checkbox toggle"""
         from PyQt6.QtWidgets import QLineEdit
         
+        # Show/hide minimum quantity field
+        self.min_qty_edit.setVisible(checked)
+        
+        # Connect minimum quantity change to update rows
+        if checked:
+            self.min_qty_edit.textChanged.connect(self._update_min_quantities)
+        else:
+            self.min_qty_edit.textChanged.disconnect()
+        
         for row in range(self.items_table.rowCount()):
             qty_widget = self.items_table.cellWidget(row, 7)  # Quantity column
             total_widget = self.items_table.cellWidget(row, 9)  # Total column
@@ -142,7 +158,8 @@ class QuotationDialog(QDialog):
             if isinstance(qty_widget, QLineEdit):
                 qty_widget.setEnabled(not checked)
                 if checked:
-                    qty_widget.setText("N/A")
+                    min_qty = self.min_qty_edit.text() or "500"
+                    qty_widget.setText(f"à partir de {min_qty}")
                 else:
                     qty_widget.setText("100")
             
@@ -152,6 +169,20 @@ class QuotationDialog(QDialog):
                     total_widget.setText("N/A")
                 else:
                     self._recalc_row_total(row)
+
+    def _update_min_quantities(self):
+        """Update all quantity fields when minimum quantity changes"""
+        from PyQt6.QtWidgets import QLineEdit
+        
+        if not self.initial_devis_check.isChecked():
+            return
+            
+        min_qty = self.min_qty_edit.text() or "500"
+        
+        for row in range(self.items_table.rowCount()):
+            qty_widget = self.items_table.cellWidget(row, 7)  # Quantity column
+            if isinstance(qty_widget, QLineEdit):
+                qty_widget.setText(f"à partir de {min_qty}")
 
     def _add_item_row(self):
         from PyQt6.QtWidgets import QLineEdit, QComboBox
@@ -181,7 +212,8 @@ class QuotationDialog(QDialog):
         # Quantité
         qty = QLineEdit(); qty.setPlaceholderText('Ex: 1000 ou >1000'); 
         if self.initial_devis_check.isChecked():
-            qty.setText('N/A')
+            min_qty = self.min_qty_edit.text() or "500"
+            qty.setText(f'à partir de {min_qty}')
             qty.setEnabled(False)
         else:
             qty.setText('100')
@@ -250,8 +282,10 @@ class QuotationDialog(QDialog):
             t = ctype.text().strip() if isinstance(ctype, QLineEdit) else ''
             is_cliche = cliche.currentIndex() == 1 if isinstance(cliche, QComboBox) else False
             q = qty.text().strip() if isinstance(qty, QLineEdit) else '0'
-            # Handle N/A quantities for initial devis
-            if q == 'N/A':
+            # Handle "à partir de" quantities for initial devis
+            if q.startswith('à partir de'):
+                q = '0'  # Don't calculate totals for initial devis
+            elif q == 'N/A':
                 q = '0'
             try:
                 unit_text = unit.text().strip().replace(',', '.') if isinstance(unit, QLineEdit) else '0'
