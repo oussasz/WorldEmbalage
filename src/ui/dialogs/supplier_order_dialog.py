@@ -15,9 +15,11 @@ class SupplierOrderDialog(QDialog):
     def _build_ui(self):
         layout = QVBoxLayout(self)
         
-        # Reference
+        # Reference - Auto-generated using standardized method
         layout.addWidget(QLabel('Référence:'))
+        from utils.helpers import generate_reference
         self.ref_edit = QLineEdit()
+        self.ref_edit.setText(generate_reference("CMD"))  # Auto-generate with CMD prefix
         layout.addWidget(self.ref_edit)
         
         # Supplier
@@ -52,6 +54,12 @@ class SupplierOrderDialog(QDialog):
         self.width_spin.setValue(700)
         dim_layout.addWidget(self.width_spin)
         
+        dim_layout.addWidget(QLabel('Rabat (mm):'))
+        self.rabat_spin = QSpinBox()
+        self.rabat_spin.setRange(1, 1000)
+        self.rabat_spin.setValue(100)
+        dim_layout.addWidget(self.rabat_spin)
+        
         layout.addLayout(dim_layout)
         
         # Quantity
@@ -85,6 +93,7 @@ class SupplierOrderDialog(QDialog):
             'material_type': self.material_edit.text().strip(),
             'length_mm': self.length_spin.value(),
             'width_mm': self.width_spin.value(),
+            'rabat_mm': self.rabat_spin.value(),
             'quantity': self.quantity_spin.value(),
             'notes': self.notes_edit.toPlainText().strip()
         }

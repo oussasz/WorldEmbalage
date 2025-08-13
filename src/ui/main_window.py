@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QMenuBar, QMenu, QMessageBox, QTabWidget, QToolBar, QLineEdit, QStatusBar, QDialog
 from PyQt6.QtGui import QAction, QIcon
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSize
 from config.database import SessionLocal
 from models.suppliers import Supplier
 from models.clients import Client
@@ -38,14 +38,27 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         """Build the main UI structure."""
+        from ui.styles import IconManager
+        from PyQt6.QtCore import QSize
+        
         # Create central widget
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
         # Main layout
         layout = QVBoxLayout(central_widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(10)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        
+        # Add app header with logo and name
+        self._create_app_header(layout)
+        
+        # Content layout with margins
+        content_widget = QWidget()
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(10, 10, 10, 10)
+        content_layout.setSpacing(10)
+        layout.addWidget(content_widget)
         
         # Menu bar
         self._create_menu_bar()
@@ -56,11 +69,12 @@ class MainWindow(QMainWindow):
         # Tab widget for different views
         self.tab_widget = QTabWidget()
         self.tab_widget.setTabPosition(QTabWidget.TabPosition.North)
-        layout.addWidget(self.tab_widget)
+        self.tab_widget.setIconSize(QSize(20, 20)) # Set icon size for tabs
+        content_layout.addWidget(self.tab_widget)
         
         # Create dashboard
         self.dashboard = Dashboard()
-        self.tab_widget.addTab(self.dashboard, "📊 Tableau de Bord")
+        self.tab_widget.addTab(self.dashboard, IconManager.get_dashboard_icon(), "Tableau de Bord")
         
         # Create data grids for different entities
         self._create_data_grids()
@@ -75,6 +89,62 @@ class MainWindow(QMainWindow):
         
         # Load initial data
         self.refresh_all()
+
+    def _create_app_header(self, layout) -> None:
+        """Create the app header with logo and name"""
+        from pathlib import Path
+        from PyQt6.QtWidgets import QHBoxLayout, QLabel, QWidget, QVBoxLayout
+        from PyQt6.QtGui import QPixmap
+        from PyQt6.QtCore import Qt
+        
+        header_widget = QWidget()
+        header_widget.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border-bottom: 1px solid #DADFE3; /* Light gray border */
+                padding: 5px 0;
+            }
+            QLabel {
+                background-color: transparent;
+            }
+        """)
+        
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(15, 5, 15, 5)
+        header_layout.setSpacing(15)
+        
+        # App logo
+        logo_label = QLabel()
+        logo_path = Path(__file__).resolve().parent.parent.parent / 'LOGO.jpg'
+        if logo_path.exists():
+            pixmap = QPixmap(str(logo_path))
+            scaled_pixmap = pixmap.scaled(50, 50, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+            logo_label.setPixmap(scaled_pixmap)
+            logo_label.setFixedSize(50, 50)
+        else:
+            # Fallback text logo for white background
+            logo_label.setText("WE")
+            logo_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #2c3e50; background-color: #f0f0f0; border-radius: 25px;")
+            logo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            logo_label.setFixedSize(50, 50)
+        
+        # App name and subtitle with dark text
+        title_layout = QVBoxLayout()
+        title_layout.setSpacing(2)
+        app_name = QLabel("World Embalage")
+        app_name.setStyleSheet("font-size: 20px; font-weight: bold; color: #2c3e50;")
+        
+        app_subtitle = QLabel("Gestion complette et robuste")
+        app_subtitle.setStyleSheet("font-size: 12px; color: #555555;")
+        
+        title_layout.addWidget(app_name)
+        title_layout.addWidget(app_subtitle)
+        
+        header_layout.addWidget(logo_label)
+        header_layout.addLayout(title_layout)
+        header_layout.addStretch()
+        
+        layout.addWidget(header_widget)
 
     def _create_menu_bar(self) -> None:
         """Create the application menu bar."""
@@ -93,34 +163,45 @@ class MainWindow(QMainWindow):
         # Data menu
         data_menu = menubar.addMenu('&Données')
         if data_menu:
+            from ui.styles import IconManager
+            
             suppliers_action = QAction('&Fournisseurs', self)
+            suppliers_action.setIcon(IconManager.get_supplier_icon())
             suppliers_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(1))
             data_menu.addAction(suppliers_action)
 
             clients_action = QAction('&Clients', self)
+            clients_action.setIcon(IconManager.get_client_icon())
             clients_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(2))
             data_menu.addAction(clients_action)
 
-            orders_action = QAction('C&ommandes', self)
+            orders_action = QAction('Devis', self)
+            orders_action.setIcon(IconManager.get_quotation_icon())
             orders_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(3))
             data_menu.addAction(orders_action)
 
     def _create_toolbar(self) -> None:
         """Create the main toolbar."""
+        from ui.styles import IconManager
         toolbar = QToolBar()
         self.addToolBar(toolbar)
         
-        # Search field
+        # Search field with proper icon
+        search_label = QLabel("Recherche:")
+        search_label.setStyleSheet("padding: 5px; font-weight: bold;")
+        toolbar.addWidget(search_label)
+        
         self.search_field = QLineEdit()
         self.search_field.setPlaceholderText("Rechercher...")
         self.search_field.setMaximumWidth(250)
-        toolbar.addWidget(QLabel("🔍"))
         toolbar.addWidget(self.search_field)
         
         toolbar.addSeparator()
         
-        # Refresh action
-        refresh_action = QAction('🔄 Actualiser', self)
+        # Refresh action with proper icon
+        refresh_action = QAction('Actualiser', self)
+        refresh_action.setIcon(IconManager.get_refresh_icon())
+        refresh_action.setToolTip('Actualiser toutes les données')
         refresh_action.triggered.connect(self.refresh_all)
         toolbar.addAction(refresh_action)
 
@@ -131,14 +212,14 @@ class MainWindow(QMainWindow):
             ["ID", "Nom", "Contact", "Téléphone", "Email", "Adresse"]
         )
         self.suppliers_grid.add_action_button("➕ Nouveau", self._new_supplier)
-        self.tab_widget.addTab(self.suppliers_grid, "🏪 Fournisseurs")
+        self.tab_widget.addTab(self.suppliers_grid, IconManager.get_supplier_icon(), "Fournisseurs")
         
         # Clients tab
         self.clients_grid = DataGrid(
             ["ID", "Nom", "Contact", "Téléphone", "Email", "Adresse"]
         )
         self.clients_grid.add_action_button("➕ Nouveau", self._new_client)
-        self.tab_widget.addTab(self.clients_grid, "👥 Clients")
+        self.tab_widget.addTab(self.clients_grid, IconManager.get_client_icon(), "Clients")
         
         # Orders tab with enhanced context menu
         self.orders_grid = DataGrid(
@@ -149,39 +230,62 @@ class MainWindow(QMainWindow):
         # Setup context menu for orders
         self._setup_context_menus()
         
-        self.tab_widget.addTab(self.orders_grid, "📋 Devis")
+        self.tab_widget.addTab(self.orders_grid, IconManager.get_quotation_icon(), "Devis")
         
         # Supplier Orders tab
         self.supplier_orders_grid = DataGrid(
             ["ID", "Référence", "Fournisseur", "Statut", "Date"]
         )
         self.supplier_orders_grid.add_action_button("➕ Nouvelle", self._new_supplier_order)
-        self.tab_widget.addTab(self.supplier_orders_grid, "📦 Cmd. Fournisseurs")
+        self.tab_widget.addTab(self.supplier_orders_grid, IconManager.get_supplier_order_icon(), "Cmd. Fournisseurs")
         
         # Receptions tab
         self.receptions_grid = DataGrid(
             ["ID", "Référence", "Commande", "Date", "Statut"]
         )
         self.receptions_grid.add_action_button("➕ Nouvelle", self._new_reception)
-        self.tab_widget.addTab(self.receptions_grid, "📥 Réceptions")
+        self.tab_widget.addTab(self.receptions_grid, IconManager.get_reception_icon(), "Réceptions")
         
         # Production tab
         self.production_grid = DataGrid(
             ["ID", "Référence", "Commande", "Date début", "Statut", "Quantité"]
         )
         self.production_grid.add_action_button("➕ Nouveau", self._new_production)
-        self.tab_widget.addTab(self.production_grid, "🏭 Production")
+        self.tab_widget.addTab(self.production_grid, IconManager.get_production_icon(), "Production")
 
     def _setup_context_menus(self):
         """Setup context menus for data grids"""
-        # Orders context menu
-        self.orders_grid.add_context_action("edit", "✏️ Modifier devis")
-        self.orders_grid.add_context_action("print", "🖨️ Imprimer devis")
-        self.orders_grid.add_context_action("delete", "🗑️ Supprimer devis")
-        self.orders_grid.add_context_action("create_supplier_order", "📦 Créer commande matières")
+        # Orders context menu - static actions only
+        self.orders_grid.add_context_action("edit", "Modifier devis")
+        self.orders_grid.add_context_action("print", "Imprimer devis")
+        self.orders_grid.add_context_action("delete", "Supprimer devis")
+        # Note: create_supplier_order is added dynamically based on devis type
         
-        # Connect context menu signal
+        # Connect context menu signals
         self.orders_grid.contextMenuActionTriggered.connect(self._handle_orders_context_menu)
+        self.orders_grid.contextMenuAboutToShow.connect(self._customize_orders_context_menu)
+
+    def _customize_orders_context_menu(self, row: int, row_data: list, menu):
+        """Customize context menu based on quotation type"""
+        from PyQt6.QtGui import QAction
+        
+        if not row_data or len(row_data) < 5:
+            return
+        
+        # Status is in column 4 (index 4): "Devis Initial" or "Devis Final"
+        status = row_data[4] if len(row_data) > 4 else ""
+        
+        # Only add "Créer commande matières" for Final Devis
+        if status == "Devis Final":
+            # Add separator if there are already actions
+            if menu.actions():
+                menu.addSeparator()
+            
+            # Add dynamic action for creating supplier order
+            action = QAction("Créer commande matières", self)
+            action.triggered.connect(lambda checked: 
+                                   self.orders_grid.contextMenuActionTriggered.emit("create_supplier_order", row, row_data))
+            menu.addAction(action)
 
     def _handle_orders_context_menu(self, action_name: str, row: int, row_data: list):
         """Handle context menu actions for orders grid (quotations only)"""
@@ -208,7 +312,163 @@ class MainWindow(QMainWindow):
         elif action_name == "delete":
             self._delete_quotation_by_id(order_id, reference)
         elif action_name == "create_supplier_order":
-            print("Cannot create supplier order from quotation - convert to client order first")
+            # Check if this is a Final Devis before allowing supplier order creation
+            if len(row_data) > 4 and row_data[4] == "Devis Final":
+                self._create_supplier_order_for_quotation(order_id, reference)
+            else:
+                QMessageBox.information(self, 'Information', 
+                                      'Les commandes de matières premières ne peuvent être créées que pour les Devis Finaux.')
+                
+    def _create_supplier_order_for_quotation(self, quotation_id: int, reference: str):
+        """Create a supplier order based on a quotation's materials with automatic dimension calculations"""
+        from models.orders import Quotation, SupplierOrder
+        from models.suppliers import Supplier
+        from ui.dialogs.supplier_order_dialog import SupplierOrderDialog
+        from datetime import date
+        
+        session = SessionLocal()
+        try:
+            # Get the quotation
+            quotation = session.query(Quotation).filter(Quotation.id == quotation_id).first()
+            if not quotation:
+                QMessageBox.warning(self, 'Erreur', f'Devis {reference} introuvable')
+                return
+            
+            # Check if it's a Final Devis
+            if quotation.is_initial:
+                QMessageBox.information(self, 'Information', 
+                                      'Les commandes de matières premières ne peuvent être créées que pour les Devis Finaux.')
+                return
+            
+            # Get suppliers for the dialog
+            suppliers = session.query(Supplier).all()
+            if not suppliers:
+                QMessageBox.warning(self, 'Erreur', 'Aucun fournisseur disponible. Créez d\'abord un fournisseur.')
+                return
+            
+            # Calculate plaque dimensions and collect carton types
+            plaque_calculations = []
+            carton_types = set()
+            total_quantity = 0
+            
+            for line_item in quotation.line_items:
+                # Extract dimensions (in mm) with defaults for None values
+                largeur_caisse = line_item.width_mm or 0  # l (width)
+                longueur_caisse = line_item.length_mm or 0  # L (length) 
+                hauteur_caisse = line_item.height_mm or 0  # H (height)
+                
+                # Skip items without proper dimensions
+                if largeur_caisse == 0 or longueur_caisse == 0 or hauteur_caisse == 0:
+                    continue
+                
+                # Calculate plaque dimensions
+                # La largeur de plaque = largeur de caisse + hauteur de caisse
+                largeur_plaque = largeur_caisse + hauteur_caisse
+                
+                # La longueur de plaque = (largeur de caisse + longueur de carton) * 2
+                longueur_plaque = (largeur_caisse + longueur_caisse) * 2
+                
+                # Rabat de plaque = hauteur de caisse / 2
+                rabat_plaque = hauteur_caisse / 2
+                
+                # Extract numeric quantity
+                import re
+                qty_text = str(line_item.quantity)
+                numbers = re.findall(r'\d+', qty_text)
+                numeric_quantity = int(numbers[-1]) if numbers else 1
+                total_quantity += numeric_quantity
+                
+                # Collect carton type
+                if line_item.cardboard_type:
+                    carton_types.add(line_item.cardboard_type)
+                
+                plaque_calculations.append({
+                    'description': line_item.description,
+                    'largeur_plaque': largeur_plaque,
+                    'longueur_plaque': longueur_plaque,
+                    'rabat_plaque': rabat_plaque,
+                    'quantity': numeric_quantity,
+                    'carton_type': line_item.cardboard_type
+                })
+            
+            if not plaque_calculations:
+                QMessageBox.warning(self, 'Erreur', 'Aucun élément trouvé dans le devis pour calculer les dimensions.')
+                return
+            
+            # For multiple items, use the largest dimensions to ensure all items can be cut from the same plaque
+            max_largeur = max(calc['largeur_plaque'] for calc in plaque_calculations)
+            max_longueur = max(calc['longueur_plaque'] for calc in plaque_calculations)
+            max_rabat = max(calc['rabat_plaque'] for calc in plaque_calculations)
+            
+            # Get the most common carton type, or combine if multiple types
+            if len(carton_types) == 1:
+                carton_type = list(carton_types)[0]
+            elif len(carton_types) > 1:
+                carton_type = " + ".join(sorted(carton_types))
+            else:
+                carton_type = "Carton standard"
+            
+            # Create supplier order dialog
+            dlg = SupplierOrderDialog(suppliers, self)
+            dlg.setWindowTitle(f'Créer commande matières pour {reference}')
+            
+            # Pre-fill ALL fields with calculated values
+            from utils.helpers import generate_reference
+            dlg.ref_edit.setText(generate_reference("CMD"))  # Standardized reference generation
+            dlg.material_edit.setText(carton_type)
+            dlg.length_spin.setValue(int(max_longueur))  # Calculated plaque length
+            dlg.width_spin.setValue(int(max_largeur))    # Calculated plaque width
+            dlg.rabat_spin.setValue(int(max_rabat))      # Calculated rabat
+            dlg.quantity_spin.setValue(total_quantity)   # Total quantity needed
+            
+            # Pre-fill notes with detailed calculations
+            calculation_details = f"Commande générée depuis le devis {reference}\n\n"
+            calculation_details += "Calculs détaillés des plaques:\n"
+            for i, calc in enumerate(plaque_calculations, 1):
+                calculation_details += f"\nArticle {i}: {calc['description']}\n"
+                calculation_details += f"- Largeur plaque: {calc['largeur_plaque']} mm\n"
+                calculation_details += f"- Longueur plaque: {calc['longueur_plaque']} mm\n"
+                calculation_details += f"- Rabat plaque: {calc['rabat_plaque']} mm\n"
+                calculation_details += f"- Quantité: {calc['quantity']}\n"
+                calculation_details += f"- Type carton: {calc['carton_type']}\n"
+            
+            calculation_details += f"\nDimensions maximales retenues:\n"
+            calculation_details += f"Longueur: {max_longueur} mm, Largeur: {max_largeur} mm\n"
+            calculation_details += f"Quantité totale: {total_quantity}"
+            
+            dlg.notes_edit.setPlainText(calculation_details)
+            
+            if dlg.exec():
+                data = dlg.get_data()
+                
+                # Create supplier order
+                supplier_order = SupplierOrder(
+                    supplier_id=data['supplier_id'],
+                    reference=data['reference'],
+                    order_date=data['order_date'],
+                    notes=data['notes']
+                )
+                
+                session.add(supplier_order)
+                session.commit()
+                
+                QMessageBox.information(self, 'Succès', 
+                                      f'Commande matières créée avec succès!\n\n'
+                                      f'Référence: {data["reference"]}\n'
+                                      f'Matériau: {data["material_type"]}\n'
+                                      f'Dimensions calculées automatiquement:\n'
+                                      f'  • Longueur: {data["length_mm"]} mm\n'
+                                      f'  • Largeur: {data["width_mm"]} mm\n'
+                                      f'  • Rabat: {data["rabat_mm"]} mm\n'
+                                      f'Quantité totale: {data["quantity"]}')
+                self.dashboard.add_activity("M", f"Commande matières créée depuis {reference}", "#28A745")
+                self.refresh_all()
+                
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création de la commande: {str(e)}')
+        finally:
+            session.close()
 
     def _new_supplier(self) -> None:
         """Open dialog to create a new supplier."""

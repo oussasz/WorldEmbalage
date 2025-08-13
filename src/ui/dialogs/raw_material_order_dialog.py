@@ -12,7 +12,7 @@ class RawMaterialOrderDialog(QDialog):
         self.suppliers = suppliers
         self.client_order = client_order
         self.setWindowTitle(f'Commande Matières Premières - {client_order.reference}')
-        self.setWindowIcon(IconManager.get_material_icon())
+        self.setWindowIcon(IconManager.get_supplier_order_icon())
         self.setMinimumWidth(700)
         self.setModal(True)
         self._calculated_dimensions = {}
@@ -35,9 +35,11 @@ class RawMaterialOrderDialog(QDialog):
         order_layout = QFormLayout(order_frame)
         order_layout.setSpacing(15)
         
-        # Reference
+        # Reference - Auto-generated using standardized method
+        from utils.helpers import generate_reference
         self.ref_edit = QLineEdit()
-        self.ref_edit.setPlaceholderText('Ex: MAT-2025-001')
+        self.ref_edit.setText(generate_reference("MAT"))  # Auto-generate with MAT prefix
+        self.ref_edit.setPlaceholderText('Ex: MAT-ABC123')
         order_layout.addRow('Référence commande:', self.ref_edit)
         
         # Supplier

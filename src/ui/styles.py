@@ -9,20 +9,23 @@ class IconManager:
     """Manages application icons with fallback to text-based icons"""
     
     @staticmethod
-    def create_text_icon(text: str, size: int = 32, bg_color: str = "#4A90E2", text_color: str = "#FFFFFF") -> QIcon:
-        """Create a simple text-based icon honoring the provided colors"""
+    def create_text_icon(text: str, size: int = 32, bg_color: str = "transparent", text_color: str = "#000000") -> QIcon:
+        """Create a simple text-based icon, now transparent by default."""
         pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
         
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QColor(bg_color))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(0, 0, size, size)
+        
+        if bg_color != "transparent":
+            painter.setBrush(QColor(bg_color))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawEllipse(0, 0, size, size)
+            
         painter.setPen(QColor(text_color))
         
-        # dynamic font sizing
-        font = QFont("Segoe UI", max(9, size // 3), QFont.Weight.DemiBold)
+        # Use a larger font size for emojis
+        font = QFont("Segoe UI Emoji", size // 2, QFont.Weight.Normal)
         painter.setFont(font)
         painter.drawText(0, 0, size, size, Qt.AlignmentFlag.AlignCenter, text)
         
@@ -30,36 +33,36 @@ class IconManager:
         return QIcon(pixmap)
     
     @staticmethod
+    def get_dashboard_icon() -> QIcon:
+        return IconManager.create_text_icon("📊")
+
+    @staticmethod
     def get_supplier_icon() -> QIcon:
-        return IconManager.create_text_icon("F", bg_color="#FF6B35")  # F for Fournisseur
-    
+        return IconManager.create_text_icon("🏪")
+
     @staticmethod
     def get_client_icon() -> QIcon:
-        return IconManager.create_text_icon("C", bg_color="#4ECDC4")
-    
-    @staticmethod
-    def get_order_icon() -> QIcon:
-        return IconManager.create_text_icon("C", bg_color="#45B7D1")  # C for Commande
-    
-    @staticmethod
-    def get_material_icon() -> QIcon:
-        return IconManager.create_text_icon("M", bg_color="#96CEB4")
-    
-    @staticmethod
-    def get_production_icon() -> QIcon:
-        return IconManager.create_text_icon("P", bg_color="#FFEAA7")
-    
+        return IconManager.create_text_icon("👥")
+
     @staticmethod
     def get_quotation_icon() -> QIcon:
-        return IconManager.create_text_icon("D", bg_color="#DDA0DD")  # D for Devis
-    
+        return IconManager.create_text_icon("📋")
+
+    @staticmethod
+    def get_supplier_order_icon() -> QIcon:
+        return IconManager.create_text_icon("📦")
+
     @staticmethod
     def get_reception_icon() -> QIcon:
-        return IconManager.create_text_icon("R", bg_color="#98D8C8")
-    
+        return IconManager.create_text_icon("📥")
+
+    @staticmethod
+    def get_production_icon() -> QIcon:
+        return IconManager.create_text_icon("🏭")
+
     @staticmethod
     def get_refresh_icon() -> QIcon:
-        return IconManager.create_text_icon("↻", bg_color="#6C5CE7")
+        return IconManager.create_text_icon("🔄")
 
 
 class StyleManager:

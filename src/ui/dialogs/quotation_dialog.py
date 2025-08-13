@@ -31,8 +31,11 @@ class QuotationDialog(QDialog):
         form_layout.setSpacing(15)
         form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         
-        # Référence
-        self.ref_edit = QLineEdit(); self.ref_edit.setPlaceholderText('Ex: DEV-2025-001')
+        # Référence - Auto-generated using standardized method
+        from utils.helpers import generate_reference
+        self.ref_edit = QLineEdit()
+        self.ref_edit.setText(generate_reference("DEV"))  # Auto-generate with DEV prefix
+        self.ref_edit.setPlaceholderText('Ex: DEV-ABC123')
         form_layout.addRow('Référence:', self.ref_edit)
         
         # Client

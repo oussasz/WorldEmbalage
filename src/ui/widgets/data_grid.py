@@ -10,6 +10,8 @@ class DataGrid(QWidget):
     rowDoubleClicked = pyqtSignal(int)
     # Signal emitted when a context menu action is triggered (action_name, row_index, row_data)
     contextMenuActionTriggered = pyqtSignal(str, int, list)
+    # Signal emitted before context menu is shown (row_index, row_data, menu)
+    contextMenuAboutToShow = pyqtSignal(int, list, QMenu)
     
     def __init__(self, headers: Sequence[str], parent=None):
         super().__init__(parent)
@@ -312,6 +314,12 @@ class DataGrid(QWidget):
                 row_data.append('')
         
         menu = QMenu(self)
+        
+        # First emit signal to allow parent to add dynamic actions
+        if hasattr(self, 'contextMenuAboutToShow'):
+            self.contextMenuAboutToShow.emit(row, row_data, menu)
+        
+        # Add static context actions
         for action_name, label, icon in self._context_actions:
             action = QAction(label, self)
             if icon:
