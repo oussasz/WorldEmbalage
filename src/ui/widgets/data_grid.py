@@ -1,8 +1,8 @@
 from __future__ import annotations
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem, QHeaderView, QLabel, QPushButton, QMenu
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QAction
-from typing import Sequence, Callable
+from PyQt6.QtGui import QFont, QAction, QColor
+from typing import Sequence, Callable, Optional
 
 
 class DataGrid(QWidget):
@@ -106,6 +106,16 @@ class DataGrid(QWidget):
         # Adjust column widths after loading data
         QTimer.singleShot(10, self._adjust_column_widths)
 
+    def load_rows_with_colors(self, rows: Sequence[Sequence[str]], row_colors: Optional[Sequence[Optional[str]]] = None):
+        """Load rows with optional color coding for each row.
+        row_colors: list of color codes (e.g., '#ffeeee', 'lightblue') or None for default color
+        """
+        self._all_rows = [list(map(lambda v: '' if v is None else str(v), r)) for r in rows]
+        self._render_rows_with_colors(self._all_rows, row_colors)
+        self._update_info_label(len(self._all_rows))
+        # Adjust column widths after loading data
+        QTimer.singleShot(10, self._adjust_column_widths)
+
     def refresh_data(self, rows: Sequence[Sequence[str]]):
         """Refresh table data and adjust column widths."""
         self.load_rows(rows)
@@ -129,6 +139,51 @@ class DataGrid(QWidget):
                     item = QTableWidgetItem(display)
                     # Conserver valeur brute pour tri (si vide => '')
                     item.setData(Qt.ItemDataRole.UserRole, val)
+                    self.table.setItem(r_index, c, item)
+        finally:
+            self.table.setUpdatesEnabled(True)
+            self.table.setSortingEnabled(sorting_prev)
+            if sorting_prev:
+                # Retrigger tri courant sur première colonne par défaut
+                self.table.sortItems(0, Qt.SortOrder.AscendingOrder)
+            vp = self.table.viewport()
+            if vp:
+                vp.update()
+        
+        # Ajuster la hauteur après rendu
+        v_header = self.table.verticalHeader()
+        if v_header:
+            v_header.setDefaultSectionSize(35)
+
+    def _render_rows_with_colors(self, rows: Sequence[Sequence[str]], row_colors: Optional[Sequence[Optional[str]]] = None):
+        """Render a list of rows into the table with optional color coding.
+        row_colors: list of color codes for each row, or None for default colors
+        """
+        if not self.table:
+            return
+        sorting_prev = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
+        self.table.setUpdatesEnabled(False)
+        try:
+            self.table.clearContents()
+            self.table.setRowCount(len(rows))
+            for r_index, row in enumerate(rows):
+                # Get row color if provided
+                row_color = None
+                if row_colors and r_index < len(row_colors) and row_colors[r_index]:
+                    row_color = QColor(row_colors[r_index])
+                
+                for c, val in enumerate(row):
+                    # Placeholder visible si valeur vide
+                    display = val if (isinstance(val, str) and val.strip()) else '—'
+                    item = QTableWidgetItem(display)
+                    # Conserver valeur brute pour tri (si vide => '')
+                    item.setData(Qt.ItemDataRole.UserRole, val)
+                    
+                    # Apply row color if specified
+                    if row_color:
+                        item.setBackground(row_color)
+                    
                     self.table.setItem(r_index, c, item)
         finally:
             self.table.setUpdatesEnabled(True)

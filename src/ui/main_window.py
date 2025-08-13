@@ -142,14 +142,14 @@ class MainWindow(QMainWindow):
         
         # Orders tab with enhanced context menu
         self.orders_grid = DataGrid(
-            ["ID", "Référence", "Client", "Date", "Statut", "Total (DA)"]
+            ["ID", "Référence", "Client", "Date", "Statut", "Dimensions", "Quantités", "Total (DA)", "Notes"]
         )
         self.orders_grid.add_action_button("➕ Devis", self._new_quotation)
         
         # Setup context menu for orders
         self._setup_context_menus()
         
-        self.tab_widget.addTab(self.orders_grid, "📋 Commandes")
+        self.tab_widget.addTab(self.orders_grid, "📋 Devis")
         
         # Supplier Orders tab
         self.supplier_orders_grid = DataGrid(
@@ -184,12 +184,12 @@ class MainWindow(QMainWindow):
         self.orders_grid.contextMenuActionTriggered.connect(self._handle_orders_context_menu)
 
     def _handle_orders_context_menu(self, action_name: str, row: int, row_data: list):
-        """Handle context menu actions for orders grid"""
-        if not row_data or len(row_data) == 0:
+        """Handle context menu actions for orders grid (quotations only)"""
+        if not row_data or len(row_data) < 2:
             return
             
-        # Assuming first column is ID and second is reference
-        order_id_str = row_data[0] if len(row_data) > 0 else None
+        # Extract order information: ID, Reference (no Type column anymore)
+        order_id_str = row_data[0]
         reference = row_data[1] if len(row_data) > 1 else ""
         
         if not order_id_str:
@@ -200,6 +200,7 @@ class MainWindow(QMainWindow):
         except (ValueError, TypeError):
             return
         
+        # Since we only show quotations now, all actions are for quotations
         if action_name == "edit":
             self._edit_quotation_by_id(order_id, reference)
         elif action_name == "print":
@@ -207,7 +208,7 @@ class MainWindow(QMainWindow):
         elif action_name == "delete":
             self._delete_quotation_by_id(order_id, reference)
         elif action_name == "create_supplier_order":
-            self._create_supplier_order_for_client_order(order_id, reference)
+            print("Cannot create supplier order from quotation - convert to client order first")
 
     def _new_supplier(self) -> None:
         """Open dialog to create a new supplier."""
@@ -450,13 +451,13 @@ class MainWindow(QMainWindow):
         """Edit quotation by order ID"""
         session = SessionLocal()
         try:
-            client_order = session.get(ClientOrder, order_id)
-            if not client_order or not client_order.quotation:
+            quotation = session.get(Quotation, order_id)
+            if not quotation:
                 QMessageBox.warning(self, 'Erreur', 'Devis introuvable')
                 return
                 
             clients = session.query(Client).all()
-            dlg = EditQuotationDialog(client_order.quotation, clients, self)
+            dlg = EditQuotationDialog(quotation, clients, self)
             
             if dlg.exec():
                 data = dlg.get_data()
@@ -470,7 +471,6 @@ class MainWindow(QMainWindow):
                     return
                 
                 # Update quotation
-                quotation = client_order.quotation
                 quotation.reference = data.get('reference') or quotation.reference
                 quotation.client_id = data['client_id']
                 quotation.issue_date = data.get('issue_date') or quotation.issue_date
@@ -479,8 +479,6 @@ class MainWindow(QMainWindow):
                 
                 # Delete existing line items
                 for item in quotation.line_items:
-                    session.delete(item)
-                for item in client_order.line_items:
                     session.delete(item)
                 
                 # Create new line items
@@ -510,28 +508,10 @@ class MainWindow(QMainWindow):
                         is_cliche=item_data.get('is_cliche', False)
                     )
                     session.add(line_item)
-                    
-                    order_line_item = ClientOrderLineItem(
-                        client_order_id=client_order.id,
-                        line_number=idx,
-                        description=item_data['description'],
-                        quantity=quantity_str,
-                        unit_price=unit_price,
-                        total_price=total_price,
-                        length_mm=item_data.get('length_mm'),
-                        width_mm=item_data.get('width_mm'),
-                        height_mm=item_data.get('height_mm'),
-                        color=item_data.get('color'),
-                        cardboard_type=item_data.get('cardboard_type'),
-                        is_cliche=item_data.get('is_cliche', False)
-                    )
-                    session.add(order_line_item)
                     total_amount += total_price
                 
-                # Update client order
-                client_order.reference = data.get('reference') or client_order.reference
-                client_order.client_id = data['client_id']
-                client_order.total_amount = total_amount  # type: ignore
+                # Update quotation totals
+                quotation.total_amount = total_amount  # type: ignore
                 
                 session.commit()
                 QMessageBox.information(self, 'Succès', f'Devis {data.get("reference", "unknown")} modifié')
@@ -548,14 +528,14 @@ class MainWindow(QMainWindow):
         """Print quotation by generating PDF from template"""
         session = SessionLocal()
         try:
-            client_order = session.get(ClientOrder, order_id)
-            if not client_order or not client_order.quotation:
+            quotation = session.get(Quotation, order_id)
+            if not quotation:
                 QMessageBox.warning(self, 'Erreur', 'Devis introuvable')
                 return
             
             # Get quotation data for PDF
             order_service = OrderService(session)
-            quotation_data = order_service.get_quotation_for_pdf(client_order.quotation.id)
+            quotation_data = order_service.get_quotation_for_pdf(quotation.id)
             
             # Generate PDF using template
             pdf_filler = PDFFormFiller()
@@ -603,10 +583,10 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.StandardButton.Yes:
             session = SessionLocal()
             try:
-                client_order = session.get(ClientOrder, order_id)
-                if client_order:
-                    # Delete associated quotation and line items (cascade should handle this)
-                    session.delete(client_order)
+                quotation = session.get(Quotation, order_id)
+                if quotation:
+                    # Delete quotation and line items (cascade should handle this)
+                    session.delete(quotation)
                     session.commit()
                     QMessageBox.information(self, 'Succès', f'Devis {reference} supprimé')
                     self.dashboard.add_activity("S", f"Devis supprimé: {reference}", "#DC3545")
@@ -719,20 +699,56 @@ class MainWindow(QMainWindow):
             ]
             self.clients_grid.load_rows(clients_data)
             
-            # Refresh orders
-            orders = session.query(ClientOrder).all()
-            orders_data = [
-                [
-                    str(o.id),
-                    o.reference or "",
-                    o.client.name if o.client else "N/A",
-                    str(o.order_date) if o.order_date else "",
-                    o.status.value if o.status else "N/A",
-                    f"{o.total_amount:,.2f}" if o.total_amount is not None else "0.00",
-                ]
-                for o in orders
-            ]
-            self.orders_grid.load_rows(orders_data)
+            # Refresh orders (quotations only) - filter out orphaned records
+            quotations = session.query(Quotation).join(Quotation.client).all()
+            
+            orders_data = []
+            row_colors = []
+            
+            # Add quotations to the list
+            for q in quotations:
+                # Skip quotations without valid client relationships
+                if not q.client:
+                    continue
+                    
+                # Get dimensions summary from line items
+                dimensions = []
+                quantities = []
+                for item in q.line_items:
+                    if item.length_mm and item.width_mm and item.height_mm:
+                        dimensions.append(f"{item.length_mm}×{item.width_mm}×{item.height_mm}")
+                    quantities.append(str(item.quantity))
+                
+                dimensions_str = ", ".join(str(d) for d in dimensions[:2])  # Show first 2 dimensions
+                if len(dimensions) > 2:
+                    dimensions_str += f" (+{len(dimensions)-2})"
+                
+                quantities_str = ", ".join(str(q) for q in quantities[:2])  # Show first 2 quantities  
+                if len(quantities) > 2:
+                    quantities_str += f" (+{len(quantities)-2})"
+                
+                # Determine status based on type
+                status = "Devis Initial" if q.is_initial else "Devis Final"
+                
+                orders_data.append([
+                    str(q.id),
+                    str(q.reference or ""),
+                    str(q.client.name if q.client else "N/A"),
+                    str(q.issue_date) if q.issue_date else "",
+                    str(status),
+                    str(dimensions_str or "N/A"),
+                    str(quantities_str or "N/A"), 
+                    f"{q.total_amount:,.2f}" if q.total_amount is not None else "0.00",
+                    str((q.notes[:30] + "..." if q.notes and len(q.notes) > 30 else q.notes) or "")
+                ])
+                
+                # Color coding: light blue for initial devis, light green for final devis
+                if q.is_initial:
+                    row_colors.append("#E3F2FD")  # Light blue for initial devis
+                else:
+                    row_colors.append("#E8F5E8")  # Light green for final devis
+                
+            self.orders_grid.load_rows_with_colors(orders_data, row_colors)
             
             # Refresh supplier orders
             supplier_orders = session.query(SupplierOrder).all()
