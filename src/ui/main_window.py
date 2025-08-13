@@ -20,6 +20,7 @@ from ui.dialogs.quotation_dialog import QuotationDialog
 from ui.dialogs.edit_quotation_dialog import EditQuotationDialog
 from ui.dialogs.reception_dialog import ReceptionDialog
 from ui.dialogs.production_dialog import ProductionDialog
+from ui.dialogs.quotation_detail_dialog import QuotationDetailDialog
 from ui.widgets.data_grid import DataGrid
 from ui.widgets.dashboard import Dashboard
 from ui.widgets.split_view import SplitView
@@ -236,6 +237,9 @@ class MainWindow(QMainWindow):
         # Setup context menu for orders
         self._setup_context_menus()
         
+        # Connect double-click to show detail dialog
+        self.orders_grid.rowDoubleClicked.connect(self._on_quotation_double_click)
+        
         self.tab_widget.addTab(self.orders_grid, IconManager.get_quotation_icon(), "Devis")
         
         # 3. Commande de matière première (renamed from Cmd. Fournisseurs)
@@ -290,6 +294,47 @@ class MainWindow(QMainWindow):
             action.triggered.connect(lambda checked: 
                                    self.orders_grid.contextMenuActionTriggered.emit("create_supplier_order", row, row_data))
             menu.addAction(action)
+
+    def _on_quotation_double_click(self, row: int):
+        """Handle double-click on quotation row to show detailed view"""
+        row_data = []
+        for col in range(self.orders_grid.table.columnCount()):
+            item = self.orders_grid.table.item(row, col)
+            if item:
+                row_data.append(item.text())
+            else:
+                row_data.append('')
+        
+        if not row_data or len(row_data) < 2:
+            return
+            
+        # Extract quotation ID
+        quotation_id_str = row_data[0]
+        if not quotation_id_str:
+            return
+            
+        try:
+            quotation_id = int(quotation_id_str)
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, 'Erreur', 'ID de devis invalide')
+            return
+        
+        # Get quotation from database and show detail dialog
+        session = SessionLocal()
+        try:
+            quotation = session.get(Quotation, quotation_id)
+            if not quotation:
+                QMessageBox.warning(self, 'Erreur', 'Devis introuvable')
+                return
+                
+            # Show detail dialog
+            detail_dialog = QuotationDetailDialog(quotation, self)
+            detail_dialog.exec()
+                
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'affichage des détails: {str(e)}')
+        finally:
+            session.close()
 
     def _handle_orders_context_menu(self, action_name: str, row: int, row_data: list):
         """Handle context menu actions for orders grid (quotations only)"""
