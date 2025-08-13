@@ -179,17 +179,31 @@ class PDFFormFiller:
             }
 
             coordinates = [
-                {"field": "devie_number", "x": 100, "y": 200},
-                {"field": "client_phone", "x": 400, "y": 180},
-                {"field": "client_email", "x": 400, "y": 200},
-                {"field": "client_address", "x": 400, "y": 220},
-                {"field": "client_company", "x": 100, "y": 220},
-                {"field": "devie_date", "x": 485, "y": 150}
+               
+                
+                
+                
+                {"field": "client_company", "x": 60, "y": 185},
+                {"field": "client_email", "x": 60, "y": 200},
+                {"field": "client_phone", "x": 60, "y": 215},
+                {"field": "client_address", "x": 60, "y": 230},
+                
+
+ {"field": "devie_number", "x": 515, "y": 139},
+                {"field": "devie_date", "x": 485, "y": 153}
             ]
 
             for item in coordinates:
                 field_name = item["field"]
                 if field_name in field_map:
+                    # Set different font styles for different fields
+                    if field_name == "client_company":
+                        c.setFont("Helvetica-Bold", 16)  # Bigger and bold for company name
+                    elif field_name in ["client_email", "client_address", "client_phone"]:
+                        c.setFont("Helvetica", 11)  # Smaller font size for contact details
+                    else:
+                        c.setFont("Helvetica", 10)  # Normal font size for other fields
+                    
                     c.drawString(item["x"], height - item["y"], str(field_map[field_name]))
 
             # Line items table
@@ -266,9 +280,12 @@ class PDFFormFiller:
 
                 table.setStyle(style)
 
-                # Draw the table on the canvas
+                # Center the table horizontally on the page
+                table_width, table_height = table.wrap(0, 0)
+                x_position = (width - table_width) / 2  # Center X
+                y_position = height - 370  # Keep Y as before (adjust if needed)
                 table.wrapOn(c, width, height)
-                table.drawOn(c, 60, height - 370)
+                table.drawOn(c, x_position, y_position)
 
                 # Total (only show for non-initial devis)
                 if not data.get('is_initial', False):
