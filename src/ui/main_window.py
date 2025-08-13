@@ -22,6 +22,7 @@ from ui.dialogs.reception_dialog import ReceptionDialog
 from ui.dialogs.production_dialog import ProductionDialog
 from ui.widgets.data_grid import DataGrid
 from ui.widgets.dashboard import Dashboard
+from ui.widgets.split_view import SplitView
 from ui.styles import IconManager
 from services.order_service import OrderService
 from services.pdf_form_filler import PDFFormFiller, PDFFillError
@@ -165,20 +166,25 @@ class MainWindow(QMainWindow):
         if data_menu:
             from ui.styles import IconManager
             
-            suppliers_action = QAction('&Fournisseurs', self)
-            suppliers_action.setIcon(IconManager.get_supplier_icon())
-            suppliers_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(1))
-            data_menu.addAction(suppliers_action)
+            clients_suppliers_action = QAction('&Client et Fournisseur', self)
+            clients_suppliers_action.setIcon(IconManager.get_client_icon())
+            clients_suppliers_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(1))
+            data_menu.addAction(clients_suppliers_action)
 
-            clients_action = QAction('&Clients', self)
-            clients_action.setIcon(IconManager.get_client_icon())
-            clients_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(2))
-            data_menu.addAction(clients_action)
+            devis_action = QAction('&Devis', self)
+            devis_action.setIcon(IconManager.get_quotation_icon())
+            devis_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(2))
+            data_menu.addAction(devis_action)
 
-            orders_action = QAction('Devis', self)
-            orders_action.setIcon(IconManager.get_quotation_icon())
-            orders_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(3))
-            data_menu.addAction(orders_action)
+            material_orders_action = QAction('&Commande de matière première', self)
+            material_orders_action.setIcon(IconManager.get_supplier_order_icon())
+            material_orders_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(3))
+            data_menu.addAction(material_orders_action)
+
+            stock_action = QAction('&Stock', self)
+            stock_action.setIcon(IconManager.get_reception_icon())
+            stock_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(4))
+            data_menu.addAction(stock_action)
 
     def _create_toolbar(self) -> None:
         """Create the main toolbar."""
@@ -206,22 +212,22 @@ class MainWindow(QMainWindow):
         toolbar.addAction(refresh_action)
 
     def _create_data_grids(self) -> None:
-        """Create data grids for each entity type."""
-        # Suppliers tab
-        self.suppliers_grid = DataGrid(
-            ["ID", "Nom", "Contact", "Téléphone", "Email", "Adresse"]
-        )
-        self.suppliers_grid.add_action_button("➕ Nouveau", self._new_supplier)
-        self.tab_widget.addTab(self.suppliers_grid, IconManager.get_supplier_icon(), "Fournisseurs")
+        """Create data grids for each entity type with new menu structure."""
         
-        # Clients tab
-        self.clients_grid = DataGrid(
-            ["ID", "Nom", "Contact", "Téléphone", "Email", "Adresse"]
+        # 1. Client et Fournisseur (Split view)
+        self.clients_suppliers_split = SplitView(
+            "Fournisseurs", ["ID", "Nom", "Contact", "Téléphone", "Email", "Adresse"],
+            "Clients", ["ID", "Nom", "Contact", "Téléphone", "Email", "Adresse"]
         )
-        self.clients_grid.add_action_button("➕ Nouveau", self._new_client)
-        self.tab_widget.addTab(self.clients_grid, IconManager.get_client_icon(), "Clients")
+        self.clients_suppliers_split.add_left_action_button("➕ Nouveau Fournisseur", self._new_supplier)
+        self.clients_suppliers_split.add_right_action_button("➕ Nouveau Client", self._new_client)
+        self.tab_widget.addTab(self.clients_suppliers_split, IconManager.get_client_icon(), "Client et Fournisseur")
         
-        # Orders tab with enhanced context menu
+        # Store references to individual grids for refresh functionality
+        self.suppliers_grid = self.clients_suppliers_split.left_grid
+        self.clients_grid = self.clients_suppliers_split.right_grid
+        
+        # 2. Devis (Keep as is - perfect and without errors)
         self.orders_grid = DataGrid(
             ["ID", "Référence", "Client", "Date", "Statut", "Dimensions", "Quantités", "Total (DA)", "Notes"]
         )
@@ -232,26 +238,24 @@ class MainWindow(QMainWindow):
         
         self.tab_widget.addTab(self.orders_grid, IconManager.get_quotation_icon(), "Devis")
         
-        # Supplier Orders tab
+        # 3. Commande de matière première (renamed from Cmd. Fournisseurs)
         self.supplier_orders_grid = DataGrid(
             ["ID", "Référence", "Fournisseur", "Statut", "Date"]
         )
         self.supplier_orders_grid.add_action_button("➕ Nouvelle", self._new_supplier_order)
-        self.tab_widget.addTab(self.supplier_orders_grid, IconManager.get_supplier_order_icon(), "Cmd. Fournisseurs")
+        self.tab_widget.addTab(self.supplier_orders_grid, IconManager.get_supplier_order_icon(), "Commande de matière première")
         
-        # Receptions tab
-        self.receptions_grid = DataGrid(
-            ["ID", "Référence", "Commande", "Date", "Statut"]
+        # 4. Stock (Split view: Raw materials and Finished products)
+        self.stock_split = SplitView(
+            "Matières Premières", ["ID", "Type", "Référence", "Quantité", "Unité", "Fournisseur", "Date Réception"],
+            "Produits Finis", ["ID", "Référence", "Description", "Quantité", "Statut", "Date Production"]
         )
-        self.receptions_grid.add_action_button("➕ Nouvelle", self._new_reception)
-        self.tab_widget.addTab(self.receptions_grid, IconManager.get_reception_icon(), "Réceptions")
+        # Note: We'll use receptions for raw materials and production for finished products
+        self.tab_widget.addTab(self.stock_split, IconManager.get_reception_icon(), "Stock")
         
-        # Production tab
-        self.production_grid = DataGrid(
-            ["ID", "Référence", "Commande", "Date début", "Statut", "Quantité"]
-        )
-        self.production_grid.add_action_button("➕ Nouveau", self._new_production)
-        self.tab_widget.addTab(self.production_grid, IconManager.get_production_icon(), "Production")
+        # Store references for refresh functionality
+        self.receptions_grid = self.stock_split.left_grid  # Raw materials
+        self.production_grid = self.stock_split.right_grid  # Finished products
 
     def _setup_context_menus(self):
         """Setup context menus for data grids"""
@@ -930,7 +934,7 @@ class MainWindow(QMainWindow):
         try:
             session = SessionLocal()
             
-            # Refresh suppliers
+            # Refresh suppliers (left side of split view)
             suppliers = session.query(Supplier).all()
             suppliers_data = [
                 [
@@ -943,9 +947,9 @@ class MainWindow(QMainWindow):
                 ]
                 for s in suppliers
             ]
-            self.suppliers_grid.load_rows(suppliers_data)
+            self.clients_suppliers_split.load_left_data(suppliers_data)
             
-            # Refresh clients
+            # Refresh clients (right side of split view)
             clients = session.query(Client).all()
             clients_data = [
                 [
@@ -958,7 +962,7 @@ class MainWindow(QMainWindow):
                 ]
                 for c in clients
             ]
-            self.clients_grid.load_rows(clients_data)
+            self.clients_suppliers_split.load_right_data(clients_data)
             
             # Refresh orders (quotations only) - filter out orphaned records
             quotations = session.query(Quotation).join(Quotation.client).all()
@@ -1025,34 +1029,36 @@ class MainWindow(QMainWindow):
             ]
             self.supplier_orders_grid.load_rows(supplier_orders_data)
             
-            # Refresh receptions
+            # Refresh stock - Raw materials (receptions) on left side
             receptions = session.query(Reception).all()
             receptions_data = [
                 [
                     str(r.id),
-                    getattr(r, 'reference', ''),
-                    r.supplier_order.reference if r.supplier_order else "N/A",
-                    getattr(r, 'reception_date', None) and getattr(r, 'reception_date').isoformat() or "",
-                    getattr(r, 'status', None) and getattr(r, 'status').value or "N/A",
+                    getattr(r.supplier_order, 'notes', '') or "Matière première",  # Type
+                    getattr(r, 'reference', ''),  # Reference
+                    "N/A",  # Quantity (would need to be added to Reception model)
+                    "unité",  # Unit
+                    r.supplier_order.supplier.name if r.supplier_order and r.supplier_order.supplier else "N/A",  # Supplier
+                    getattr(r, 'reception_date', None) and getattr(r, 'reception_date').isoformat() or "",  # Date
                 ]
                 for r in receptions
             ]
-            self.receptions_grid.load_rows(receptions_data)
+            self.stock_split.load_left_data(receptions_data)
             
-            # Refresh production
+            # Refresh stock - Finished products (production) on right side
             production_batches = session.query(ProductionBatch).all()
             production_data = [
                 [
                     str(pb.id),
-                    getattr(pb, 'reference', ''),
-                    getattr(pb, 'client_order', None) and getattr(getattr(pb, 'client_order'), 'reference', 'N/A') or "N/A",
-                    getattr(pb, 'start_date', None) and getattr(pb, 'start_date').isoformat() or "",
-                    getattr(pb, 'status', None) and getattr(pb, 'status').value or "N/A",
-                    str(getattr(pb, 'quantity_produced', 0) or 0),
+                    getattr(pb, 'reference', ''),  # Reference
+                    getattr(pb, 'client_order', None) and getattr(getattr(pb, 'client_order'), 'reference', 'N/A') or "N/A",  # Description (using client order ref)
+                    str(getattr(pb, 'quantity_produced', 0) or 0),  # Quantity
+                    getattr(pb, 'status', None) and getattr(pb, 'status').value or "N/A",  # Status
+                    getattr(pb, 'start_date', None) and getattr(pb, 'start_date').isoformat() or "",  # Date
                 ]
                 for pb in production_batches
             ]
-            self.production_grid.load_rows(production_data)
+            self.stock_split.load_right_data(production_data)
             
             # Update dashboard
             if hasattr(self, 'dashboard'):
