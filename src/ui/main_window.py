@@ -234,9 +234,6 @@ class MainWindow(QMainWindow):
         )
         self.orders_grid.add_action_button("➕ Devis", self._new_quotation)
         
-        # Setup context menu for orders
-        self._setup_context_menus()
-        
         # Connect double-click to show detail dialog
         self.orders_grid.rowDoubleClicked.connect(self._on_quotation_double_click)
         
@@ -247,6 +244,10 @@ class MainWindow(QMainWindow):
             ["ID", "Référence", "Fournisseur", "Statut", "Date"]
         )
         self.supplier_orders_grid.add_action_button("➕ Nouvelle", self._new_supplier_order)
+        
+        # Connect double-click to show detail dialog
+        self.supplier_orders_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
+        
         self.tab_widget.addTab(self.supplier_orders_grid, IconManager.get_supplier_order_icon(), "Commande de matière première")
         
         # 4. Stock (Split view: Raw materials and Finished products)
@@ -260,6 +261,9 @@ class MainWindow(QMainWindow):
         # Store references for refresh functionality
         self.receptions_grid = self.stock_split.left_grid  # Raw materials
         self.production_grid = self.stock_split.right_grid  # Finished products
+        
+        # Setup context menus after all grids are created
+        self._setup_context_menus()
 
     def _setup_context_menus(self):
         """Setup context menus for data grids"""
@@ -272,6 +276,17 @@ class MainWindow(QMainWindow):
         # Connect context menu signals
         self.orders_grid.contextMenuActionTriggered.connect(self._handle_orders_context_menu)
         self.orders_grid.contextMenuAboutToShow.connect(self._customize_orders_context_menu)
+        
+        # Supplier orders context menu
+        self.supplier_orders_grid.add_context_action("edit", "Modifier commande")
+        self.supplier_orders_grid.add_context_action("delete", "Supprimer commande")
+        self.supplier_orders_grid.add_context_action("status_initial", "→ Commande Initial")
+        self.supplier_orders_grid.add_context_action("status_ordered", "→ Commande Passée")
+        self.supplier_orders_grid.add_context_action("status_received", "→ Commande Arrivée")
+        
+        # Connect supplier orders context menu signals
+        self.supplier_orders_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
+        self.supplier_orders_grid.contextMenuAboutToShow.connect(self._customize_supplier_orders_context_menu)
 
     def _customize_orders_context_menu(self, row: int, row_data: list, menu):
         """Customize context menu based on quotation type"""
@@ -703,7 +718,7 @@ class MainWindow(QMainWindow):
         session = SessionLocal()
         try:
             orders = session.query(SupplierOrder).filter(
-                SupplierOrder.status.in_([SupplierOrderStatus.PENDING, SupplierOrderStatus.CONFIRMED])
+                SupplierOrder.status.in_([SupplierOrderStatus.INITIAL, SupplierOrderStatus.ORDERED])
             ).all()
             if not orders:
                 QMessageBox.warning(self, 'Attention', 'Aucune commande fournisseur en attente.')
@@ -1062,13 +1077,21 @@ class MainWindow(QMainWindow):
             
             # Refresh supplier orders
             supplier_orders = session.query(SupplierOrder).all()
+            
+            # Map internal status values to display labels
+            status_display_map = {
+                'commande_initial': 'Commande Initial',
+                'commande_passee': 'Commande Passée', 
+                'commande_arrivee': 'Commande Arrivée'
+            }
+            
             supplier_orders_data = [
                 [
                     str(so.id),
                     so.reference or "",
                     so.supplier.name if so.supplier else "N/A",
-                    so.status.value if so.status else "N/A",
-                    getattr(so, 'created_date', None) and getattr(so, 'created_date').isoformat() or "",
+                    status_display_map.get(so.status.value if so.status else "", "N/A"),
+                    str(so.order_date) if so.order_date else "",
                 ]
                 for so in supplier_orders
             ]
@@ -1114,5 +1137,211 @@ class MainWindow(QMainWindow):
         finally:
             if session is not None:
                 session.close()
+
+    def _on_supplier_order_double_click(self, row: int):
+        """Handle double-click on supplier order row to show detailed view"""
+        row_data = []
+        for col in range(self.supplier_orders_grid.table.columnCount()):
+            item = self.supplier_orders_grid.table.item(row, col)
+            if item:
+                row_data.append(item.text())
+            else:
+                row_data.append('')
+        
+        if not row_data or len(row_data) < 2:
+            return
+            
+        # Extract supplier order information
+        order_id_str = row_data[0]
+        reference = row_data[1] if len(row_data) > 1 else ""
+        
+        if not order_id_str:
+            return
+            
+        try:
+            order_id = int(order_id_str)
+        except (ValueError, TypeError):
+            return
+        
+        session = SessionLocal()
+        try:
+            supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == order_id).first()
+            if not supplier_order:
+                QMessageBox.warning(self, 'Erreur', f'Commande {reference} introuvable')
+                return
+                
+            # Show detail dialog (you'll need to create SupplierOrderDetailDialog)
+            from ui.dialogs.supplier_order_detail_dialog import SupplierOrderDetailDialog
+            detail_dialog = SupplierOrderDetailDialog(supplier_order, self)
+            detail_dialog.exec()
+                
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'affichage des détails: {str(e)}')
+        finally:
+            session.close()
+
+    def _handle_supplier_orders_context_menu(self, action_name: str, row: int, row_data: list):
+        """Handle context menu actions for supplier orders grid"""
+        if not row_data or len(row_data) < 2:
+            return
+            
+        # Extract order information: ID, Reference, Supplier, Status, Date
+        order_id_str = row_data[0]
+        reference = row_data[1] if len(row_data) > 1 else ""
+        
+        if not order_id_str:
+            return
+            
+        try:
+            order_id = int(order_id_str)
+        except (ValueError, TypeError):
+            return
+        
+        if action_name == "edit":
+            self._edit_supplier_order_by_id(order_id, reference)
+        elif action_name == "delete":
+            self._delete_supplier_order_by_id(order_id, reference)
+        elif action_name.startswith("status_"):
+            status_map = {
+                "status_initial": "commande_initial",
+                "status_ordered": "commande_passee", 
+                "status_received": "commande_arrivee"
+            }
+            new_status = status_map.get(action_name)
+            if new_status:
+                self._change_supplier_order_status(order_id, reference, new_status)
+
+    def _customize_supplier_orders_context_menu(self, row: int, row_data: list, menu):
+        """Customize context menu based on supplier order status"""
+        if not row_data or len(row_data) < 4:
+            return
+        
+        # Status is in column 3 (index 3)
+        current_status = row_data[3] if len(row_data) > 3 else ""
+        
+        # Map display status to internal status values
+        status_map = {
+            'Commande Initial': 'commande_initial',
+            'Commande Passée': 'commande_passee', 
+            'Commande Arrivée': 'commande_arrivee'
+        }
+        
+        internal_status = status_map.get(current_status, 'commande_initial')
+        
+        # Show/hide status actions based on current status and progression rules
+        for action in menu.actions():
+            if action.text() == "→ Commande Initial":
+                # Can always go back to initial (for corrections)
+                action.setVisible(internal_status != 'commande_initial')
+            elif action.text() == "→ Commande Passée":
+                # Can only go to "passée" from "initial"
+                action.setVisible(internal_status == 'commande_initial')
+            elif action.text() == "→ Commande Arrivée":
+                # Can only go to "arrivée" from "passée"
+                action.setVisible(internal_status == 'commande_passee')
+
+    def _change_supplier_order_status(self, order_id: int, reference: str, new_status: str):
+        """Change the status of a supplier order"""
+        session = SessionLocal()
+        try:
+            supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == order_id).first()
+            if not supplier_order:
+                QMessageBox.warning(self, 'Erreur', f'Commande {reference} introuvable')
+                return
+            
+            # Map internal status to enum values
+            status_enum_map = {
+                'commande_initial': SupplierOrderStatus.INITIAL,
+                'commande_passee': SupplierOrderStatus.ORDERED,
+                'commande_arrivee': SupplierOrderStatus.RECEIVED
+            }
+            
+            new_enum_status = status_enum_map.get(new_status)
+            if not new_enum_status:
+                QMessageBox.warning(self, 'Erreur', f'Statut invalide: {new_status}')
+                return
+            
+            # Update the status
+            supplier_order.status = new_enum_status
+            session.commit()
+            
+            # Show confirmation and refresh
+            status_display_map = {
+                'commande_initial': 'Commande Initial',
+                'commande_passee': 'Commande Passée', 
+                'commande_arrivee': 'Commande Arrivée'
+            }
+            
+            display_status = status_display_map.get(new_status, new_status)
+            QMessageBox.information(self, 'Succès', f'Statut de la commande {reference} changé vers "{display_status}"')
+            self.refresh_all()
+            
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors du changement de statut: {str(e)}')
+        finally:
+            session.close()
+
+    def _edit_supplier_order_by_id(self, order_id: int, reference: str):
+        """Edit a supplier order by ID"""
+        # TODO: Implement edit functionality when SupplierOrderEditDialog is created
+        QMessageBox.information(self, 'Information', f'Fonctionnalité d\'édition en cours de développement pour la commande {reference}')
+        return
+        
+        # session = SessionLocal()
+        # try:
+        #     supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == order_id).first()
+        #     if not supplier_order:
+        #         QMessageBox.warning(self, 'Erreur', f'Commande {reference} introuvable')
+        #         return
+        #     
+        #     # Get suppliers for the dialog
+        #     suppliers = session.query(Supplier).all()
+        #     if not suppliers:
+        #         QMessageBox.warning(self, 'Erreur', 'Aucun fournisseur disponible.')
+        #         return
+        #     
+        #     # Open edit dialog (you'll need to create an edit version)
+        #     from ui.dialogs.supplier_order_edit_dialog import SupplierOrderEditDialog
+        #     dlg = SupplierOrderEditDialog(suppliers, supplier_order, self)
+        #     
+        #     if dlg.exec():
+        #         # Refresh the grid
+        #         self.refresh_all()
+        #         QMessageBox.information(self, 'Succès', f'Commande {reference} modifiée avec succès')
+        #         
+        # except Exception as e:
+        #     QMessageBox.critical(self, 'Erreur', f'Erreur lors de la modification: {str(e)}')
+        # finally:
+        #     session.close()
+
+    def _delete_supplier_order_by_id(self, order_id: int, reference: str):
+        """Delete a supplier order by ID"""
+        # Confirm deletion
+        reply = QMessageBox.question(
+            self, 'Confirmation', 
+            f'Êtes-vous sûr de vouloir supprimer la commande {reference} ?\n\nCette action est irréversible.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        session = SessionLocal()
+        try:
+            supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == order_id).first()
+            if supplier_order:
+                session.delete(supplier_order)
+                session.commit()
+                QMessageBox.information(self, 'Succès', f'Commande {reference} supprimée avec succès')
+                self.refresh_all()
+            else:
+                QMessageBox.warning(self, 'Erreur', 'Commande introuvable')
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la suppression: {str(e)}')
+        finally:
+            session.close()
 
 __all__ = ['MainWindow']

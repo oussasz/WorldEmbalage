@@ -11,13 +11,10 @@ if TYPE_CHECKING:  # pragma: no cover
     from .plaques import Plaque
 
 # Enums
-class SupplierOrderStatus(enum.Enum):
-    ORDERED = 'commandé'
-    IN_TRANSIT = 'en_transit'
-    IN_STOCK = 'en_stock'
-    CLOSED = 'fermé'
-    PENDING = 'pending'
-    CONFIRMED = 'confirmed'
+class SupplierOrderStatus(str, enum.Enum):
+    INITIAL = 'commande_initial'
+    ORDERED = 'commande_passee'
+    RECEIVED = 'commande_arrivee'
 
 
 class ClientOrderStatus(enum.Enum):
@@ -43,7 +40,11 @@ class SupplierOrder(PKMixin, TimestampMixin, Base):
     supplier_id: Mapped[int] = mapped_column(ForeignKey('suppliers.id', ondelete='RESTRICT'), index=True, nullable=False)
     reference: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     order_date: Mapped[Date] = mapped_column(Date, server_default=func.current_date(), index=True)
-    status: Mapped[SupplierOrderStatus] = mapped_column(Enum(SupplierOrderStatus), default=SupplierOrderStatus.ORDERED, index=True)
+    status: Mapped[SupplierOrderStatus] = mapped_column(
+        Enum(SupplierOrderStatus, native_enum=False), 
+        default=SupplierOrderStatus.INITIAL, 
+        index=True
+    )
     notes: Mapped[str | None] = mapped_column(Text())
 
     supplier: Mapped['Supplier'] = relationship(back_populates='supplier_orders')  # type: ignore[name-defined]

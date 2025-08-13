@@ -28,8 +28,8 @@ class MaterialService:
             raise ValueError("Supplier order not found")
         reception = Reception(supplier_order_id=supplier_order_id, quantity=quantity, notes=notes)
         self.db.add(reception)
-        # Update status heuristically (in real app, compute based on ordered vs received)
-        order.status = SupplierOrderStatus.IN_STOCK
+        # Update status to RECEIVED when a reception is recorded
+        order.status = SupplierOrderStatus.RECEIVED
         self.db.commit()
         self.db.refresh(reception)
         return reception
