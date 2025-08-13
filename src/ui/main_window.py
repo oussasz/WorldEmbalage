@@ -476,6 +476,7 @@ class MainWindow(QMainWindow):
                 quotation.issue_date = data.get('issue_date') or quotation.issue_date
                 quotation.valid_until = data['valid_until']
                 quotation.notes = data['notes']
+                quotation.is_initial = data.get('is_initial', False)
                 
                 # Delete existing line items
                 for item in quotation.line_items:
