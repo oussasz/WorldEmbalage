@@ -1,5 +1,6 @@
 from __future__ import annotations
 import datetime
+import logging
 import os
 import subprocess
 from decimal import Decimal
@@ -476,10 +477,8 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, 'Erreur', 'Aucun fournisseur disponible. Créez d\'abord un fournisseur.')
                 return
             
-            # Calculate plaque dimensions and collect carton types
-            plaque_calculations = []
-            carton_types = set()
-            total_quantity = 0
+            # Calculate plaque dimensions and collect individual plaques
+            plaques = []
             
             for line_item in quotation.line_items:
                 # Extract dimensions (in mm) with defaults for None values
@@ -499,104 +498,99 @@ class MainWindow(QMainWindow):
                 longueur_plaque = (largeur_caisse + longueur_caisse) * 2
                 
                 # Rabat de plaque = hauteur de caisse / 2
-                rabat_plaque = hauteur_caisse / 2
+                rabat_plaque = hauteur_caisse // 2  # Use integer division
                 
                 # Extract numeric quantity
                 import re
                 qty_text = str(line_item.quantity)
                 numbers = re.findall(r'\d+', qty_text)
                 numeric_quantity = int(numbers[-1]) if numbers else 1
-                total_quantity += numeric_quantity
                 
-                # Collect carton type
-                if line_item.cardboard_type:
-                    carton_types.add(line_item.cardboard_type)
-                
-                plaque_calculations.append({
-                    'description': line_item.description,
-                    'largeur_plaque': largeur_plaque,
+                # Create individual plaque entry
+                plaque = {
+                    'client_name': quotation.client.name if quotation.client else 'Client inconnu',
+                    'client_id': quotation.client_id,
+                    'description': line_item.description or '',
+                    'largeur_plaque': largeur_plaque,  # Largeur × Longueur × Rabat
                     'longueur_plaque': longueur_plaque,
                     'rabat_plaque': rabat_plaque,
-                    'quantity': numeric_quantity,
-                    'carton_type': line_item.cardboard_type
-                })
+                    'material_reference': getattr(line_item, 'material_reference', '') or '',  # Référence de matière première
+                    'cardboard_type': line_item.cardboard_type or '',  # Caractéristiques
+                    'quantity': numeric_quantity,  # Quantity from devis
+                    'uttc_per_plaque': 0.0,  # UTTC per plaque (to be filled by user)
+                    'quotation_reference': quotation.reference
+                }
+                plaques.append(plaque)
             
-            if not plaque_calculations:
-                QMessageBox.warning(self, 'Erreur', 'Aucun élément trouvé dans le devis pour calculer les dimensions.')
-                return
-            
-            # For multiple items, use the largest dimensions to ensure all items can be cut from the same plaque
-            max_largeur = max(calc['largeur_plaque'] for calc in plaque_calculations)
-            max_longueur = max(calc['longueur_plaque'] for calc in plaque_calculations)
-            max_rabat = max(calc['rabat_plaque'] for calc in plaque_calculations)
-            
-            # Get the most common carton type, or combine if multiple types
-            if len(carton_types) == 1:
-                carton_type = list(carton_types)[0]
-            elif len(carton_types) > 1:
-                carton_type = " + ".join(sorted(carton_types))
-            else:
-                carton_type = "Carton standard"
-            
-            # Create supplier order dialog
-            dlg = SupplierOrderDialog(suppliers, self)
+            # Create supplier order dialog with multiple plaques
+            from ui.dialogs.multi_plaque_supplier_order_dialog import MultiPlaqueSupplierOrderDialog
+            dlg = MultiPlaqueSupplierOrderDialog(suppliers, plaques, self)
             dlg.setWindowTitle(f'Créer commande matières pour {reference}')
             
-            # Pre-fill ALL fields with calculated values
-            from utils.helpers import generate_reference
-            dlg.ref_edit.setText(generate_reference("CMD"))  # Standardized reference generation
-            dlg.material_edit.setText(carton_type)
-            dlg.length_spin.setValue(int(max_longueur))  # Calculated plaque length
-            dlg.width_spin.setValue(int(max_largeur))    # Calculated plaque width
-            dlg.rabat_spin.setValue(int(max_rabat))      # Calculated rabat
-            dlg.quantity_spin.setValue(total_quantity)   # Total quantity needed
-            
-            # Pre-fill notes with detailed calculations
-            calculation_details = f"Commande générée depuis le devis {reference}\n\n"
-            calculation_details += "Calculs détaillés des plaques:\n"
-            for i, calc in enumerate(plaque_calculations, 1):
-                calculation_details += f"\nArticle {i}: {calc['description']}\n"
-                calculation_details += f"- Largeur plaque: {calc['largeur_plaque']} mm\n"
-                calculation_details += f"- Longueur plaque: {calc['longueur_plaque']} mm\n"
-                calculation_details += f"- Rabat plaque: {calc['rabat_plaque']} mm\n"
-                calculation_details += f"- Quantité: {calc['quantity']}\n"
-                calculation_details += f"- Type carton: {calc['carton_type']}\n"
-            
-            calculation_details += f"\nDimensions maximales retenues:\n"
-            calculation_details += f"Longueur: {max_longueur} mm, Largeur: {max_largeur} mm\n"
-            calculation_details += f"Quantité totale: {total_quantity}"
-            
-            dlg.notes_edit.setPlainText(calculation_details)
-            
-            if dlg.exec():
+            if dlg.exec() == QDialog.DialogCode.Accepted:
                 data = dlg.get_data()
                 
-                # Create supplier order
-                supplier_order = SupplierOrder(
-                    supplier_id=data['supplier_id'],
-                    reference=data['reference'],
-                    order_date=data['order_date'],
-                    notes=data['notes']
-                )
+                # Create the supplier order
+                from services.material_service import MaterialService
+                material_service = MaterialService(session)
                 
-                session.add(supplier_order)
-                session.commit()
-                
-                QMessageBox.information(self, 'Succès', 
-                                      f'Commande matières créée avec succès!\n\n'
-                                      f'Référence: {data["reference"]}\n'
-                                      f'Matériau: {data["material_type"]}\n'
-                                      f'Dimensions calculées automatiquement:\n'
-                                      f'  • Longueur: {data["length_mm"]} mm\n'
-                                      f'  • Largeur: {data["width_mm"]} mm\n'
-                                      f'  • Rabat: {data["rabat_mm"]} mm\n'
-                                      f'Quantité totale: {data["quantity"]}')
-                self.dashboard.add_activity("M", f"Commande matières créée depuis {reference}", "#28A745")
-                self.refresh_all()
-                
+                try:
+                    supplier_order = material_service.create_supplier_order(
+                        supplier_id=data['supplier_id'],
+                        bon_commande_ref=data['reference'],
+                        notes=data['notes']
+                    )
+                    
+                    # Add line items for each plaque
+                    from models.orders import SupplierOrderLineItem
+                    total_amount = Decimal('0')
+                    
+                    for line_num, plaque_data in enumerate(data['plaques'], 1):
+                        line_total = Decimal(str(plaque_data['uttc_per_plaque'])) * plaque_data['quantity']
+                        total_amount += line_total
+                        
+                        line_item = SupplierOrderLineItem(
+                            supplier_order_id=supplier_order.id,
+                            client_id=plaque_data['client_id'],
+                            line_number=line_num,
+                            code_article=f"PLQ-{line_num:03d}",  # Generate article code
+                            # Caisse dimensions (from original devis)
+                            caisse_length_mm=quotation.line_items[line_num-1].length_mm or 0,
+                            caisse_width_mm=quotation.line_items[line_num-1].width_mm or 0,
+                            caisse_height_mm=quotation.line_items[line_num-1].height_mm or 0,
+                            # Plaque dimensions (calculated)
+                            plaque_width_mm=plaque_data['largeur_plaque'],
+                            plaque_length_mm=plaque_data['longueur_plaque'],
+                            plaque_flap_mm=plaque_data['rabat_plaque'],
+                            # Pricing
+                            prix_uttc_plaque=Decimal(str(plaque_data['uttc_per_plaque'])),
+                            quantity=plaque_data['quantity'],
+                            total_line_amount=line_total,
+                            # Materials
+                            cardboard_type=plaque_data['cardboard_type'],
+                            material_reference=plaque_data['material_reference'],
+                            notes=plaque_data['notes']
+                        )
+                        session.add(line_item)
+                    
+                    # Update supplier order total
+                    supplier_order.total_amount = total_amount  # type: ignore
+                    session.commit()
+                    
+                    QMessageBox.information(self, 'Succès', 
+                        f'Commande de matière première {data["reference"]} créée avec succès.\n'
+                        f'Total: {total_amount:.2f} DA\n'
+                        f'Plaques: {len(data["plaques"])}')
+                    
+                    # Refresh the supplier orders grid
+                    self.refresh_all()
+                    
+                except Exception as e:
+                    session.rollback()
+                    QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création de la commande: {str(e)}')
         except Exception as e:
-            session.rollback()
             QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création de la commande: {str(e)}')
+            logging.error(f"Error creating supplier order: {e}")
         finally:
             session.close()
 
@@ -1048,11 +1042,9 @@ class MainWindow(QMainWindow):
                 session.close()
 
     def _create_supplier_order_for_multiple_quotations(self, selected_rows_data: list[list[str]]):
-        """Create a single supplier order from multiple quotations"""
-        from models.orders import Quotation, SupplierOrder, SupplierOrderLineItem
+        """Create a single supplier order from multiple quotations using the multi-plaque dialog"""
+        from models.orders import Quotation, SupplierOrder
         from models.suppliers import Supplier
-        from utils.helpers import generate_reference
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QComboBox, QLabel, QPushButton, QHBoxLayout, QTextEdit
         
         session = SessionLocal()
         try:
@@ -1085,141 +1077,140 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, 'Erreur', 'Aucun fournisseur disponible. Créez d\'abord un fournisseur.')
                 return
             
-            # Create simple supplier selection dialog
-            dialog = QDialog(self)
-            dialog.setWindowTitle('Créer Commande Matières Premières')
-            dialog.setMinimumWidth(500)
-            layout = QVBoxLayout(dialog)
+            # Calculate plaque dimensions and collect individual plaques from all quotations
+            plaques = []
             
-            # Show quotations summary
-            summary_label = QLabel(f'Création de commande pour {len(quotations)} devis:')
-            summary_label.setStyleSheet("font-weight: bold; font-size: 14px; margin-bottom: 10px;")
-            layout.addWidget(summary_label)
+            for quotation in quotations:
+                for line_item in quotation.line_items:
+                    # Extract dimensions (in mm) with defaults for None values
+                    largeur_caisse = line_item.width_mm or 0  # l (width)
+                    longueur_caisse = line_item.length_mm or 0  # L (length) 
+                    hauteur_caisse = line_item.height_mm or 0  # H (height)
+                    
+                    # Skip items without proper dimensions
+                    if largeur_caisse == 0 or longueur_caisse == 0 or hauteur_caisse == 0:
+                        continue
+                    
+                    # Calculate plaque dimensions
+                    # La largeur de plaque = largeur de caisse + hauteur de caisse
+                    largeur_plaque = largeur_caisse + hauteur_caisse
+                    
+                    # La longueur de plaque = (largeur de caisse + longueur de carton) * 2
+                    longueur_plaque = (largeur_caisse + longueur_caisse) * 2
+                    
+                    # Rabat de plaque = hauteur de caisse / 2
+                    rabat_plaque = hauteur_caisse // 2  # Use integer division
+                    
+                    # Extract numeric quantity
+                    import re
+                    qty_text = str(line_item.quantity)
+                    numbers = re.findall(r'\d+', qty_text)
+                    numeric_quantity = int(numbers[-1]) if numbers else 1
+                    
+                    # Create individual plaque entry
+                    plaque = {
+                        'client_name': quotation.client.name if quotation.client else 'Client inconnu',
+                        'client_id': quotation.client_id,
+                        'description': line_item.description or '',
+                        'largeur_plaque': largeur_plaque,  # Largeur × Longueur × Rabat
+                        'longueur_plaque': longueur_plaque,
+                        'rabat_plaque': rabat_plaque,
+                        'material_reference': getattr(line_item, 'material_reference', '') or '',  # Référence de matière première
+                        'cardboard_type': line_item.cardboard_type or '',  # Caractéristiques
+                        'quantity': numeric_quantity,  # Quantity from devis
+                        'uttc_per_plaque': 0.0,  # UTTC per plaque (to be filled by user)
+                        'quotation_reference': quotation.reference
+                    }
+                    plaques.append(plaque)
             
-            quotations_text = QTextEdit()
-            quotations_text.setMaximumHeight(100)
-            quotations_summary = "\n".join([f"• {q.reference} - {q.client.name if q.client else 'N/A'}" for q in quotations])
-            quotations_text.setPlainText(quotations_summary)
-            quotations_text.setReadOnly(True)
-            layout.addWidget(quotations_text)
+            if not plaques:
+                QMessageBox.warning(self, 'Erreur', 'Aucune plaque valide trouvée dans les devis sélectionnés.')
+                return
             
-            # Supplier selection
-            layout.addWidget(QLabel('Fournisseur:'))
-            supplier_combo = QComboBox()
-            for supplier in suppliers:
-                supplier_combo.addItem(supplier.name, supplier.id)
-            layout.addWidget(supplier_combo)
+            # Create supplier order dialog with multiple plaques
+            from ui.dialogs.multi_plaque_supplier_order_dialog import MultiPlaqueSupplierOrderDialog
+            references = [q.reference for q in quotations]
+            dlg = MultiPlaqueSupplierOrderDialog(suppliers, plaques, self)
+            dlg.setWindowTitle(f'Créer commande matières pour {len(quotations)} devis: {", ".join(references)}')
             
-            # Notes
-            layout.addWidget(QLabel('Notes:'))
-            notes_edit = QTextEdit()
-            notes_edit.setMaximumHeight(80)
-            notes_edit.setPlainText(f"Commande générée depuis {len(quotations)} devis")
-            layout.addWidget(notes_edit)
-            
-            # Buttons
-            button_layout = QHBoxLayout()
-            create_btn = QPushButton('Créer Commande')
-            cancel_btn = QPushButton('Annuler')
-            button_layout.addWidget(cancel_btn)
-            button_layout.addWidget(create_btn)
-            layout.addLayout(button_layout)
-            
-            create_btn.clicked.connect(dialog.accept)
-            cancel_btn.clicked.connect(dialog.reject)
-            
-            if dialog.exec() == QDialog.DialogCode.Accepted:
-                supplier_id = supplier_combo.currentData()
-                if not supplier_id:
-                    QMessageBox.warning(self, 'Erreur', 'Veuillez sélectionner un fournisseur')
-                    return
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                data = dlg.get_data()
                 
-                # Generate BC reference
-                bc_ref = generate_reference("BC")
+                # Create the supplier order
+                from services.material_service import MaterialService
+                material_service = MaterialService(session)
                 
-                # Create supplier order
-                supplier_order = SupplierOrder(
-                    supplier_id=supplier_id,
-                    bon_commande_ref=bc_ref,
-                    notes=notes_edit.toPlainText()
-                )
-                session.add(supplier_order)
-                session.flush()  # Get the ID
-                
-                # Create line items from all quotations
-                line_number = 1
-                total_amount = Decimal('0')
-                
-                for quotation in quotations:
-                    for line_item in quotation.line_items:
-                        if not (line_item.length_mm and line_item.width_mm and line_item.height_mm):
-                            continue
-                            
-                        # Calculate plaque dimensions
-                        largeur_caisse = line_item.width_mm
-                        longueur_caisse = line_item.length_mm
-                        hauteur_caisse = line_item.height_mm
-                        
-                        largeur_plaque = largeur_caisse + hauteur_caisse
-                        longueur_plaque = (largeur_caisse + longueur_caisse) * 2
-                        rabat_plaque = hauteur_caisse // 2
-                        
-                        # Extract numeric quantity
-                        import re
-                        numbers = re.findall(r'\d+', str(line_item.quantity))
-                        numeric_quantity = int(numbers[-1]) if numbers else 1
-                        
-                        # Estimate price (you may want to adjust this logic)
-                        if line_item.unit_price:
-                            prix_unitaire = float(str(line_item.unit_price))
-                        else:
-                            prix_unitaire = 100.0
-                        prix_uttc = Decimal(str(prix_unitaire * 1.19))  # Add 19% tax as example
-                        line_total = prix_uttc * numeric_quantity
-                        
-                        supplier_line_item = SupplierOrderLineItem(
-                            supplier_order_id=supplier_order.id,
-                            client_id=quotation.client_id,
-                            line_number=line_number,
-                            code_article=f"ART-{quotation.reference}-{line_item.line_number}",
-                            caisse_length_mm=longueur_caisse,
-                            caisse_width_mm=largeur_caisse,
-                            caisse_height_mm=hauteur_caisse,
-                            plaque_width_mm=largeur_plaque,
-                            plaque_length_mm=longueur_plaque,
-                            plaque_flap_mm=rabat_plaque,
-                            prix_uttc_plaque=prix_uttc,
-                            quantity=numeric_quantity,
-                            total_line_amount=line_total,
-                            cardboard_type=line_item.cardboard_type,
-                            notes=f"Depuis devis {quotation.reference} - {line_item.description}"
-                        )
-                        session.add(supplier_line_item)
+                try:
+                    supplier_order = material_service.create_supplier_order(
+                        supplier_id=data['supplier_id'],
+                        bon_commande_ref=data['reference'],
+                        notes=data['notes']
+                    )
+                    
+                    # Add line items for each plaque
+                    from models.orders import SupplierOrderLineItem
+                    total_amount = Decimal('0')
+                    
+                    for line_num, plaque_data in enumerate(data['plaques'], 1):
+                        line_total = Decimal(str(plaque_data['uttc_per_plaque'])) * plaque_data['quantity']
                         total_amount += line_total
-                        line_number += 1
-                
-                # Update total amount using SQLAlchemy update
-                from sqlalchemy import update
-                stmt = update(SupplierOrder).where(SupplierOrder.id == supplier_order.id).values(total_amount=total_amount)
-                session.execute(stmt)
-                session.commit()
-                
-                QMessageBox.information(
-                    self, 
-                    'Succès', 
-                    f'Commande matières {bc_ref} créée avec succès!\n\n'
-                    f'Nombre d\'articles: {line_number - 1}\n'
-                    f'Total: {float(total_amount):,.2f} DZD\n'
-                    f'Basée sur {len(quotations)} devis'
-                )
-                self.dashboard.add_activity("CM", f"Commande matières: {bc_ref} ({len(quotations)} devis)", "#6F42C1")
-                self.refresh_all()
-                
+                        
+                        # Find original quotation line item to get caisse dimensions
+                        original_quotation = next((q for q in quotations if q.reference == plaque_data['quotation_reference']), None)
+                        if original_quotation and original_quotation.line_items:
+                            original_line = original_quotation.line_items[0]  # Take first line item as reference
+                            caisse_length = original_line.length_mm or 0
+                            caisse_width = original_line.width_mm or 0
+                            caisse_height = original_line.height_mm or 0
+                        else:
+                            caisse_length = caisse_width = caisse_height = 0
+                        
+                        line_item = SupplierOrderLineItem(
+                            supplier_order_id=supplier_order.id,
+                            client_id=plaque_data['client_id'],
+                            line_number=line_num,
+                            code_article=f"PLQ-{line_num:03d}",  # Generate article code
+                            # Caisse dimensions (from original devis)
+                            caisse_length_mm=caisse_length,
+                            caisse_width_mm=caisse_width,
+                            caisse_height_mm=caisse_height,
+                            # Plaque dimensions (calculated)
+                            plaque_width_mm=plaque_data['largeur_plaque'],
+                            plaque_length_mm=plaque_data['longueur_plaque'],
+                            plaque_flap_mm=plaque_data['rabat_plaque'],
+                            # Pricing
+                            prix_uttc_plaque=Decimal(str(plaque_data['uttc_per_plaque'])),
+                            quantity=plaque_data['quantity'],
+                            total_line_amount=line_total,
+                            # Materials
+                            cardboard_type=plaque_data['cardboard_type'],
+                            material_reference=plaque_data['material_reference'],
+                            notes=f"Depuis devis {plaque_data['quotation_reference']} - {plaque_data['notes']}"
+                        )
+                        session.add(line_item)
+                    
+                    # Update supplier order total
+                    supplier_order.total_amount = total_amount  # type: ignore
+                    session.commit()
+                    
+                    QMessageBox.information(self, 'Succès', 
+                        f'Commande de matière première {data["reference"]} créée avec succès.\n'
+                        f'Total: {total_amount:.2f} DA\n'
+                        f'Plaques: {len(data["plaques"])}\n'
+                        f'Devis sources: {", ".join(references)}')
+                    
+                    # Refresh the supplier orders grid
+                    self.refresh_all()
+                    
+                except Exception as e:
+                    session.rollback()
+                    QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création de la commande: {str(e)}')
         except Exception as e:
-            session.rollback()
-            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création: {str(e)}')
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création de la commande: {str(e)}')
+            logging.error(f"Error creating supplier order: {e}")
         finally:
             session.close()
+
 
     def _create_supplier_order_for_client_order(self, order_id: int, reference: str):
         """Create a supplier order for raw materials based on client order"""

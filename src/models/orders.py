@@ -38,6 +38,7 @@ class SupplierOrder(PKMixin, TimestampMixin, Base):
     __tablename__ = 'supplier_orders'
 
     supplier_id: Mapped[int] = mapped_column(ForeignKey('suppliers.id', ondelete='RESTRICT'), index=True, nullable=False)
+    reference: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)  # Legacy field
     bon_commande_ref: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)  # Format: BC16/2025
     order_date: Mapped[Date] = mapped_column(Date, server_default=func.current_date(), index=True)
     status: Mapped[SupplierOrderStatus] = mapped_column(
@@ -81,7 +82,8 @@ class SupplierOrderLineItem(PKMixin, TimestampMixin, Base):
     total_line_amount: Mapped[Numeric] = mapped_column(Numeric(12, 2), nullable=False, default=0)  # quantity * prix_uttc_plaque
     
     # Additional specifications
-    cardboard_type: Mapped[str | None] = mapped_column(String(64))  # Type de carton
+    cardboard_type: Mapped[str | None] = mapped_column(String(64))  # Caractéristiques (same as devis)
+    material_reference: Mapped[str | None] = mapped_column(String(64))  # Référence de matière première (same as devis)
     notes: Mapped[str | None] = mapped_column(Text())
 
     supplier_order: Mapped['SupplierOrder'] = relationship(back_populates='line_items')

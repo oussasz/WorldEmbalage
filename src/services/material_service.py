@@ -16,7 +16,12 @@ class MaterialService:
         supplier = self.db.get(Supplier, supplier_id)
         if not supplier:
             raise ValueError("Supplier not found")
-        order = SupplierOrder(supplier_id=supplier_id, bon_commande_ref=bon_commande_ref, notes=notes)
+        order = SupplierOrder(
+            supplier_id=supplier_id, 
+            reference=bon_commande_ref,  # Set both fields for compatibility
+            bon_commande_ref=bon_commande_ref, 
+            notes=notes
+        )
         self.db.add(order)
         self.db.commit()
         self.db.refresh(order)
