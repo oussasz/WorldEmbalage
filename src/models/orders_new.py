@@ -142,8 +142,7 @@ class QuotationLineItem(PKMixin, TimestampMixin, Base):
     width_mm: Mapped[int | None] = mapped_column(Integer)
     height_mm: Mapped[int | None] = mapped_column(Integer)
     color: Mapped[BoxColor | None] = mapped_column(Enum(BoxColor, native_enum=False))
-    cardboard_type: Mapped[str | None] = mapped_column(String(64))  # caractéristique de matière
-    material_reference: Mapped[str | None] = mapped_column(String(64))  # référence de matière première
+    cardboard_type: Mapped[str | None] = mapped_column(String(64))  # épaisseur / cannelure
     is_cliche: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     
     notes: Mapped[str | None] = mapped_column(Text())

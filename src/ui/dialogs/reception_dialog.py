@@ -6,7 +6,7 @@ from PyQt6.QtCore import QDate
 class ReceptionDialog(QDialog):
     def __init__(self, supplier_order, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(f'Réception - Commande {supplier_order.reference}')
+        self.setWindowTitle(f'Réception - Commande {supplier_order.bon_commande_ref}')
         self.setMinimumWidth(500)
         self.supplier_order = supplier_order
         self._build_ui()
@@ -15,7 +15,7 @@ class ReceptionDialog(QDialog):
         layout = QVBoxLayout(self)
         
         # Order info (read-only)
-        layout.addWidget(QLabel(f'Commande: {self.supplier_order.reference}'))
+        layout.addWidget(QLabel(f'Commande: {self.supplier_order.bon_commande_ref}'))
         layout.addWidget(QLabel(f'Fournisseur: {self.supplier_order.supplier.name}'))
         
         # Reception Date

@@ -103,10 +103,10 @@ class EditQuotationDialog(QDialog):
 
     def _create_items_table(self, layout):
         from PyQt6.QtWidgets import QTableWidgetItem
-        # 11 columns to match the main dialog: Description, L, l, H, Dimensions, Couleur, Type, Cliché, Quantité, PU, Total
-        self.items_table = QTableWidget(0, 11)
+        # 12 columns to match the main dialog: Description, Quantité, Prix unitaire HT, Prix total HT, Longueur, Largeur, Hauteur, Couleur, Caractéristique matière, Référence matière première, Cliché, Notes
+        self.items_table = QTableWidget(0, 12)
         self.items_table.setHorizontalHeaderLabels([
-            'Description', 'L (mm)', 'l (mm)', 'H (mm)', 'Dimensions', 'Couleur', 'Type carton', 'Cliché', 'Quantité', 'PU (DA)', 'Total (DA)'
+            'Description', 'Quantité', 'Prix unitaire HT', 'Prix total HT', 'Longueur (mm)', 'Largeur (mm)', 'Hauteur (mm)', 'Couleur', 'Caractéristique matière', 'Référence matière première', 'Cliché', 'Notes'
         ])
         
         # Set minimum row height for better visibility
@@ -119,18 +119,20 @@ class EditQuotationDialog(QDialog):
         header = self.items_table.horizontalHeader()
         if header is not None:
             # Set specific column widths for better display
-            for i in range(10):
+            for i in range(12):
                 header.setSectionResizeMode(i, header.ResizeMode.Interactive)
-            header.resizeSection(0, 180)  # Description
-            header.resizeSection(1, 80)   # L (mm)
-            header.resizeSection(2, 80)   # l (mm)
-            header.resizeSection(3, 80)   # H (mm)
-            header.resizeSection(4, 90)   # Couleur
-            header.resizeSection(5, 160)  # Type carton
-            header.resizeSection(6, 90)   # Cliché
-            header.resizeSection(7, 90)   # Quantité
-            header.resizeSection(8, 90)   # PU (DA)
-            header.resizeSection(9, 100)  # Total (DA)
+            header.resizeSection(0, 150)  # Description
+            header.resizeSection(1, 80)   # Quantité
+            header.resizeSection(2, 100)  # Prix unitaire HT
+            header.resizeSection(3, 100)  # Prix total HT
+            header.resizeSection(4, 80)   # Longueur (mm)
+            header.resizeSection(5, 80)   # Largeur (mm)
+            header.resizeSection(6, 80)   # Hauteur (mm)
+            header.resizeSection(7, 70)   # Couleur
+            header.resizeSection(8, 140)  # Caractéristique matière
+            header.resizeSection(9, 140)  # Référence matière première
+            header.resizeSection(10, 60)  # Cliché
+            header.resizeSection(11, 100) # Notes
             header.setStretchLastSection(False)
         layout.addWidget(self.items_table)
         
@@ -183,25 +185,65 @@ class EditQuotationDialog(QDialog):
                 'height_mm': line_item.height_mm,
                 'color': line_item.color,
                 'cardboard_type': line_item.cardboard_type,
+                'material_reference': getattr(line_item, 'material_reference', ''),  # Handle new field safely
                 'is_cliche': line_item.is_cliche,
                 'quantity': line_item.quantity,
                 'unit_price': str(line_item.unit_price),
-                'total_price': str(line_item.total_price)
+                'total_price': str(line_item.total_price),
+                'notes': getattr(line_item, 'notes', '')  # Handle notes field safely
             })
 
     def _add_item_row(self, preset_data: dict[str, Any] | None = None):
-        from PyQt6.QtWidgets import QLineEdit, QComboBox
+        from PyQt6.QtWidgets import QLineEdit, QComboBox, QSpinBox
         row = self.items_table.rowCount()
         self.items_table.insertRow(row)
         
-        # Description
+        # Column 0: Description
         desc = QLineEdit()
         desc.setPlaceholderText('Ex: Carton standard')
         if preset_data and preset_data.get('description'):
             desc.setText(str(preset_data['description']))
         self.items_table.setCellWidget(row, 0, desc)
         
-        # L, l, H as SpinBoxes
+        # Column 1: Quantité
+        qty = QLineEdit()
+        qty.setPlaceholderText('Ex: 1000 ou >1000')
+        if preset_data and preset_data.get('quantity'):
+            qty.setText(str(preset_data['quantity']))
+        else:
+            if self.initial_devis_check.isChecked():
+                min_qty = self.min_qty_edit.text() or "500"
+                qty.setText(f'à partir de {min_qty}')
+                qty.setEnabled(False)
+            else:
+                qty.setText('100')
+        self.items_table.setCellWidget(row, 1, qty)
+        
+        # Column 2: Prix unitaire HT
+        pu = QLineEdit()
+        pu.setPlaceholderText('0.00')
+        if preset_data and preset_data.get('unit_price'):
+            pu.setText(str(preset_data['unit_price']))
+        else:
+            pu.setText('0.00')
+        pu.textChanged.connect(lambda: self._recalc_row_total(row))
+        self.items_table.setCellWidget(row, 2, pu)
+        
+        # Column 3: Prix total HT
+        total = QLineEdit()
+        total.setReadOnly(True)
+        total.setStyleSheet("background-color: #F8F9FA; color: #495057;")
+        if preset_data and preset_data.get('total_price'):
+            total.setText(str(preset_data['total_price']))
+        else:
+            if self.initial_devis_check.isChecked():
+                total.setText('N/A')
+                total.setEnabled(False)
+            else:
+                total.setText('0.00')
+        self.items_table.setCellWidget(row, 3, total)
+        
+        # Column 4: Longueur (mm)
         def sb(default: int):
             w = QSpinBox()
             w.setRange(1, 10000)
@@ -210,20 +252,17 @@ class EditQuotationDialog(QDialog):
             return w
         
         length_spin = sb(int(preset_data.get('length_mm', 300)) if preset_data else 300)
+        self.items_table.setCellWidget(row, 4, length_spin)
+        
+        # Column 5: Largeur (mm)
         width_spin = sb(int(preset_data.get('width_mm', 200)) if preset_data else 200)
+        self.items_table.setCellWidget(row, 5, width_spin)
+        
+        # Column 6: Hauteur (mm)
         height_spin = sb(int(preset_data.get('height_mm', 150)) if preset_data else 150)
+        self.items_table.setCellWidget(row, 6, height_spin)
         
-        self.items_table.setCellWidget(row, 1, length_spin)
-        self.items_table.setCellWidget(row, 2, width_spin)
-        self.items_table.setCellWidget(row, 3, height_spin)
-        
-        # Dimensions (read-only, auto-calculated)
-        dimensions = QLineEdit()
-        dimensions.setReadOnly(True)
-        dimensions.setStyleSheet("background-color: #f5f5f5;")
-        self.items_table.setCellWidget(row, 4, dimensions)
-        
-        # Couleur
+        # Column 7: Couleur
         color = QComboBox()
         color.addItem('Blanc', BoxColor.BLANC)
         color.addItem('Brun', BoxColor.BRUN)
@@ -232,61 +271,47 @@ class EditQuotationDialog(QDialog):
                 if color.itemData(i) == preset_data['color']:
                     color.setCurrentIndex(i)
                     break
-        self.items_table.setCellWidget(row, 5, color)
+        self.items_table.setCellWidget(row, 7, color)
         
-        # Type carton
-        ctype = QLineEdit()
-        ctype.setPlaceholderText('Ex: Double cannelure BC 7mm')
+        # Column 8: Caractéristique matière (renamed from Type carton)
+        char_matiere = QLineEdit()
+        char_matiere.setPlaceholderText('Ex: Double cannelure BC 7mm')
         if preset_data and preset_data.get('cardboard_type'):
-            ctype.setText(str(preset_data['cardboard_type']))
-        self.items_table.setCellWidget(row, 6, ctype)
+            char_matiere.setText(str(preset_data['cardboard_type']))
+        self.items_table.setCellWidget(row, 8, char_matiere)
         
-        # Cliché
+        # Column 9: Référence matière première (new field)
+        ref_matiere = QLineEdit()
+        ref_matiere.setPlaceholderText('Ex: REF-MAT-001')
+        if preset_data and preset_data.get('material_reference'):
+            ref_matiere.setText(str(preset_data['material_reference']))
+        self.items_table.setCellWidget(row, 9, ref_matiere)
+        
+        # Column 10: Cliché
         cliche = QComboBox()
         cliche.addItems(['Sans', 'Avec'])
         if preset_data and preset_data.get('is_cliche'):
             cliche.setCurrentIndex(1 if preset_data['is_cliche'] else 0)
-        self.items_table.setCellWidget(row, 7, cliche)
+        self.items_table.setCellWidget(row, 10, cliche)
         
-        # Quantité (now a QLineEdit to handle string quantities)
-        qty = QLineEdit()
-        qty.setPlaceholderText('Ex: 1000 ou >1000')
-        if preset_data and preset_data.get('quantity'):
-            qty.setText(str(preset_data['quantity']))
-        elif self.initial_devis_check.isChecked():
-            min_qty = self.min_qty_edit.text() or "500"
-            qty.setText(f'à partir de {min_qty}')
-            qty.setEnabled(False)
-        else:
-            qty.setText('100')
-        self.items_table.setCellWidget(row, 8, qty)
+        # Column 11: Notes
+        notes = QLineEdit()
+        notes.setPlaceholderText('Notes optionnelles')
+        if preset_data and preset_data.get('notes'):
+            notes.setText(str(preset_data['notes']))
+        self.items_table.setCellWidget(row, 11, notes)
         
-        # PU
-        unit = QLineEdit()
-        unit.setPlaceholderText('0.00')
-        unit.setText(str(preset_data.get('unit_price', '50.00')) if preset_data else '50.00')
-        self.items_table.setCellWidget(row, 9, unit)
-        
-        # Total (read-only)
-        total = QLineEdit()
-        total.setReadOnly(True)
-        if self.initial_devis_check.isChecked():
-            total.setText('N/A')
-            total.setEnabled(False)
-        self.items_table.setCellWidget(row, 10, total)
-        
-        # Connect change events
+        # Connect quantity and unit price changes to recalculate total
         qty.textChanged.connect(lambda _v, r=row: self._recalc_row_total(r))
-        unit.textChanged.connect(lambda _t, r=row: self._recalc_row_total(r))
+        pu.textChanged.connect(lambda _t, r=row: self._recalc_row_total(r))
         
-        # Update dimensions when L, l, H change
-        length_spin.valueChanged.connect(lambda _v, r=row: self._update_dimensions(r))
-        width_spin.valueChanged.connect(lambda _v, r=row: self._update_dimensions(r))
-        height_spin.valueChanged.connect(lambda _v, r=row: self._update_dimensions(r))
+        # Setup field validation
+        self._setup_field_validation(row)
         
-        # Recalculate and update dimensions
+        # Initial validation
+        self._validate_row(row)
+        
         self._recalc_row_total(row)
-        self._update_dimensions(row)
 
     def _remove_selected_rows(self):
         selected_rows = sorted({idx.row() for idx in self.items_table.selectedIndexes()}, reverse=True)
@@ -298,9 +323,9 @@ class EditQuotationDialog(QDialog):
     def _recalc_row_total(self, row: int):
         from PyQt6.QtWidgets import QLineEdit
         import re
-        qty_w = self.items_table.cellWidget(row, 8)  # Updated column index
-        unit_w = self.items_table.cellWidget(row, 9)
-        total_w = self.items_table.cellWidget(row, 10)
+        qty_w = self.items_table.cellWidget(row, 1)   # Quantité column
+        unit_w = self.items_table.cellWidget(row, 2)  # Prix unitaire HT column
+        total_w = self.items_table.cellWidget(row, 3) # Prix total HT column
         
         try:
             # Handle "à partir de" quantities for initial devis
@@ -339,6 +364,59 @@ class EditQuotationDialog(QDialog):
         except Exception:
             pass
 
+    def _validate_field(self, widget, is_required: bool = True):
+        """Apply validation styling to a field based on whether it's required and filled"""
+        from PyQt6.QtWidgets import QLineEdit
+        if not isinstance(widget, QLineEdit):
+            return
+        
+        if is_required:
+            if widget.text().strip():
+                # Field is filled - remove red border
+                widget.setStyleSheet("")
+            else:
+                # Field is required but empty - add red border
+                widget.setStyleSheet("border: 2px solid #dc3545;")
+        else:
+            # Field is not required - always remove red border
+            widget.setStyleSheet("")
+
+    def _validate_row(self, row: int):
+        """Validate all fields in a row based on whether it's initial or final devis"""
+        from PyQt6.QtWidgets import QLineEdit
+        
+        is_initial = self.initial_devis_check.isChecked()
+        
+        # Get widgets
+        desc_widget = self.items_table.cellWidget(row, 0)  # Description
+        char_matiere_widget = self.items_table.cellWidget(row, 8)  # Caractéristique matière
+        ref_matiere_widget = self.items_table.cellWidget(row, 9)  # Référence matière première
+        
+        # For final devis, these fields are required
+        # For initial devis, only description is required
+        if isinstance(desc_widget, QLineEdit):
+            self._validate_field(desc_widget, is_required=True)  # Always required
+        
+        if isinstance(char_matiere_widget, QLineEdit):
+            self._validate_field(char_matiere_widget, is_required=not is_initial)
+            
+        if isinstance(ref_matiere_widget, QLineEdit):
+            self._validate_field(ref_matiere_widget, is_required=not is_initial)
+
+    def _setup_field_validation(self, row: int):
+        """Setup validation for all fields in a row"""
+        from PyQt6.QtWidgets import QLineEdit
+        
+        widgets_to_validate = [
+            self.items_table.cellWidget(row, 0),  # Description
+            self.items_table.cellWidget(row, 8),  # Caractéristique matière
+            self.items_table.cellWidget(row, 9),  # Référence matière première
+        ]
+        
+        for widget in widgets_to_validate:
+            if isinstance(widget, QLineEdit):
+                widget.textChanged.connect(lambda: self._validate_row(row))
+
     def _on_initial_devis_toggled(self):
         """Handle initial devis checkbox toggle"""
         is_initial = self.initial_devis_check.isChecked()
@@ -346,10 +424,10 @@ class EditQuotationDialog(QDialog):
         # Show/hide minimum quantity field
         self.min_qty_edit.setVisible(is_initial)
         
-        # Update all quantity fields
+        # Update all quantity fields and revalidate all rows
         for row in range(self.items_table.rowCount()):
-            qty_widget = self.items_table.cellWidget(row, 8)  # Quantity column
-            total_widget = self.items_table.cellWidget(row, 10)  # Total column
+            qty_widget = self.items_table.cellWidget(row, 1)  # Quantité column
+            total_widget = self.items_table.cellWidget(row, 3)  # Prix total HT column
             
             if isinstance(qty_widget, QLineEdit):
                 if is_initial:
@@ -367,6 +445,9 @@ class EditQuotationDialog(QDialog):
                 else:
                     total_widget.setEnabled(True)
                     self._recalc_row_total(row)
+            
+            # Revalidate all fields in the row based on new mode
+            self._validate_row(row)
 
     def _update_minimum_quantities(self):
         """Update all quantity fields when minimum quantity changes"""
@@ -376,41 +457,71 @@ class EditQuotationDialog(QDialog):
         min_qty = self.min_qty_edit.text() or "500"
         
         for row in range(self.items_table.rowCount()):
-            qty_widget = self.items_table.cellWidget(row, 8)  # Quantity column
+            qty_widget = self.items_table.cellWidget(row, 1)  # Quantité column
             if isinstance(qty_widget, QLineEdit):
                 qty_widget.setText(f'à partir de {min_qty}')
 
     def get_data(self) -> dict:
-        from PyQt6.QtWidgets import QLineEdit, QComboBox
+        from PyQt6.QtWidgets import QLineEdit, QComboBox, QSpinBox
         import re
         items: list[dict[str, Any]] = []
         for r in range(self.items_table.rowCount()):
+            # Column 0: Description
             desc = self.items_table.cellWidget(r, 0)
-            length = self.items_table.cellWidget(r, 1)
-            width = self.items_table.cellWidget(r, 2)
-            height = self.items_table.cellWidget(r, 3)
-            dimensions = self.items_table.cellWidget(r, 4)
-            color = self.items_table.cellWidget(r, 5)
-            ctype = self.items_table.cellWidget(r, 6)
-            cliche = self.items_table.cellWidget(r, 7)
-            qty = self.items_table.cellWidget(r, 8)
-            unit = self.items_table.cellWidget(r, 9)
+            # Column 1: Quantité
+            qty = self.items_table.cellWidget(r, 1)
+            # Column 2: Prix unitaire HT
+            unit = self.items_table.cellWidget(r, 2)
+            # Column 3: Prix total HT
+            total = self.items_table.cellWidget(r, 3)
+            # Column 4: Longueur (mm)
+            length = self.items_table.cellWidget(r, 4)
+            # Column 5: Largeur (mm)
+            width = self.items_table.cellWidget(r, 5)
+            # Column 6: Hauteur (mm)
+            height = self.items_table.cellWidget(r, 6)
+            # Column 7: Couleur
+            color = self.items_table.cellWidget(r, 7)
+            # Column 8: Caractéristique matière
+            char_matiere = self.items_table.cellWidget(r, 8)
+            # Column 9: Référence matière première
+            ref_matiere = self.items_table.cellWidget(r, 9)
+            # Column 10: Cliché
+            cliche = self.items_table.cellWidget(r, 10)
+            # Column 11: Notes
+            notes = self.items_table.cellWidget(r, 11)
             
-            # extract values safely
+            # Extract values safely
             d = desc.text().strip() if isinstance(desc, QLineEdit) else ''
+            q = qty.text().strip() if isinstance(qty, QLineEdit) else '0'
+            
+            try:
+                unit_text = unit.text().strip().replace(',', '.') if isinstance(unit, QLineEdit) else '0'
+                pu = Decimal(unit_text or '0')
+            except Exception:
+                pu = Decimal('0')
+            
+            try:
+                total_text = total.text().strip().replace(',', '.') if isinstance(total, QLineEdit) else '0'
+                if total_text == 'N/A':
+                    total_value = Decimal('0')
+                else:
+                    total_value = Decimal(total_text or '0')
+            except Exception:
+                total_value = Decimal('0')
+            
             L = length.value() if isinstance(length, QSpinBox) else 0
             l = width.value() if isinstance(width, QSpinBox) else 0
             H = height.value() if isinstance(height, QSpinBox) else 0
-            dims = dimensions.text().strip() if isinstance(dimensions, QLineEdit) else f"{L} × {l} × {H}"
             col = color.currentData() if isinstance(color, QComboBox) else BoxColor.BLANC
-            t = ctype.text().strip() if isinstance(ctype, QLineEdit) else ''
+            char_mat = char_matiere.text().strip() if isinstance(char_matiere, QLineEdit) else ''
+            ref_mat = ref_matiere.text().strip() if isinstance(ref_matiere, QLineEdit) else ''
             is_cliche = cliche.currentIndex() == 1 if isinstance(cliche, QComboBox) else False
+            notes_text = notes.text().strip() if isinstance(notes, QLineEdit) else ''
             
-            # Handle string quantities
-            qty_text = qty.text() if isinstance(qty, QLineEdit) else '0'
-            # Extract numeric quantity from string
-            numbers = re.findall(r'\d+', qty_text)
-            q = int(numbers[-1]) if numbers else 0
+            # Handle string quantities - extract numeric part for calculations
+            numbers = re.findall(r'\d+', q)
+            numeric_q = int(numbers[-1]) if numbers else 0
             
             try:
                 pu = Decimal(unit.text() if isinstance(unit, QLineEdit) else '0')
@@ -419,9 +530,9 @@ class EditQuotationDialog(QDialog):
             
             # Calculate total differently for initial devis
             if self.initial_devis_check.isChecked():
-                total = Decimal('0')  # No total for initial devis
+                final_total = Decimal('0')  # No total for initial devis
             else:
-                total = pu * q
+                final_total = pu * numeric_q
             
             items.append({
                 'description': d,
@@ -429,11 +540,13 @@ class EditQuotationDialog(QDialog):
                 'width_mm': l,
                 'height_mm': H,
                 'color': col,
-                'cardboard_type': t,
+                'cardboard_type': char_mat,  # Caractéristique matière
+                'material_reference': ref_mat,  # Référence matière première
                 'is_cliche': is_cliche,
-                'quantity': qty_text,  # Store as string for initial devis
+                'quantity': q,  # Store as string for initial devis
                 'unit_price': pu,
-                'total_price': total
+                'total_price': final_total,
+                'notes': notes_text
             })
         return {
             'reference': self.ref_edit.text().strip(),

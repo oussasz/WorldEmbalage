@@ -55,6 +55,7 @@ class DataGrid(QWidget):
         
         self.table.setAlternatingRowColors(True)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection) # Allow multi-select
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSortingEnabled(True)
         
@@ -330,5 +331,30 @@ class DataGrid(QWidget):
             menu.addAction(action)
         
         menu.exec(self.table.mapToGlobal(position))
+
+    def get_selected_row_indices(self) -> list[int]:
+        """Get list of selected row indices"""
+        selected_rows = []
+        for item in self.table.selectedItems():
+            row = item.row()
+            if row not in selected_rows:
+                selected_rows.append(row)
+        return sorted(selected_rows)
+
+    def get_row_data(self, row: int) -> list[str]:
+        """Get data for a specific row"""
+        row_data = []
+        for col in range(self.table.columnCount()):
+            cell_item = self.table.item(row, col)
+            if cell_item:
+                row_data.append(cell_item.text())
+            else:
+                row_data.append('')
+        return row_data
+
+    def get_selected_rows_data(self) -> list[list[str]]:
+        """Get data for all selected rows"""
+        selected_indices = self.get_selected_row_indices()
+        return [self.get_row_data(row) for row in selected_indices]
 
 __all__ = ['DataGrid']

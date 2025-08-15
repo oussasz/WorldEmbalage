@@ -11,12 +11,12 @@ class MaterialService:
     def __init__(self, db: Session):
         self.db = db
 
-    def create_supplier_order(self, supplier_id: int, reference: str, notes: str | None = None) -> SupplierOrder:
-        logger.debug("Creating supplier order ref={} supplier_id={}", reference, supplier_id)
+    def create_supplier_order(self, supplier_id: int, bon_commande_ref: str, notes: str | None = None) -> SupplierOrder:
+        logger.debug("Creating supplier order ref={} supplier_id={}", bon_commande_ref, supplier_id)
         supplier = self.db.get(Supplier, supplier_id)
         if not supplier:
             raise ValueError("Supplier not found")
-        order = SupplierOrder(supplier_id=supplier_id, reference=reference, notes=notes)
+        order = SupplierOrder(supplier_id=supplier_id, bon_commande_ref=bon_commande_ref, notes=notes)
         self.db.add(order)
         self.db.commit()
         self.db.refresh(order)

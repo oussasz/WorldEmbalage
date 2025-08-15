@@ -98,10 +98,33 @@ class QuotationDetailDialog(QDialog):
         info_layout = QFormLayout(info_group)
         info_layout.setSpacing(10)
         
-        # Client
-        client_label = QLabel(self.quotation.client.name if self.quotation.client else "N/A")
+        # Client information (enhanced)
+        client_info = self.quotation.client.name if self.quotation.client else "N/A"
+        if self.quotation.client:
+            if self.quotation.client.contact_name:
+                client_info += f" (Contact: {self.quotation.client.contact_name})"
+            if self.quotation.client.phone:
+                client_info += f" - Tél: {self.quotation.client.phone}"
+            if self.quotation.client.email:
+                client_info += f" - Email: {self.quotation.client.email}"
+                
+        client_label = QLabel(client_info)
         client_label.setStyleSheet("font-weight: normal; color: #495057;")
+        client_label.setWordWrap(True)
         info_layout.addRow("Client:", client_label)
+        
+        # Client address if available
+        if self.quotation.client and self.quotation.client.address:
+            address_info = self.quotation.client.address
+            if self.quotation.client.city:
+                address_info += f", {self.quotation.client.city}"
+            if self.quotation.client.country:
+                address_info += f", {self.quotation.client.country}"
+            
+            address_label = QLabel(address_info)
+            address_label.setStyleSheet("font-weight: normal; color: #495057;")
+            address_label.setWordWrap(True)
+            info_layout.addRow("Adresse:", address_label)
         
         # Dates
         issue_date = "N/A"

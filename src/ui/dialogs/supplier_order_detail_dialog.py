@@ -18,7 +18,7 @@ class SupplierOrderDetailDialog(QDialog):
     def __init__(self, supplier_order: SupplierOrder, parent=None):
         super().__init__(parent)
         self.supplier_order = supplier_order
-        self.setWindowTitle(f'Détails de la Commande - {supplier_order.reference}')
+        self.setWindowTitle(f'Détails de la Commande - {supplier_order.bon_commande_ref}')
         self.setWindowIcon(IconManager.get_supplier_order_icon())
         self.setMinimumSize(900, 600)
         self.setModal(True)
@@ -65,7 +65,7 @@ class SupplierOrderDetailDialog(QDialog):
         header_layout = QHBoxLayout(header_frame)
         
         # Order reference
-        ref_label = QLabel(f"Commande: {self.supplier_order.reference}")
+        ref_label = QLabel(f"Commande: {self.supplier_order.bon_commande_ref}")
         ref_font = QFont()
         ref_font.setPointSize(18)
         ref_font.setBold(True)
@@ -116,12 +116,44 @@ class SupplierOrderDetailDialog(QDialog):
         info_layout = QFormLayout(info_group)
         info_layout.setSpacing(10)
         
-        # Supplier
+        # Supplier information (enhanced)
         supplier_name = self.supplier_order.supplier.name if self.supplier_order.supplier else "N/A"
         supplier_label = QLabel(supplier_name)
-        supplier_label.setStyleSheet("font-weight: normal; color: #495057;")
+        supplier_label.setStyleSheet("font-weight: bold; color: #2c3e50; font-size: 14px;")
         info_layout.addRow("Fournisseur:", supplier_label)
         
+        # Supplier contact name
+        if self.supplier_order.supplier and hasattr(self.supplier_order.supplier, 'contact_name') and self.supplier_order.supplier.contact_name:
+            contact_label = QLabel(self.supplier_order.supplier.contact_name)
+            contact_label.setStyleSheet("font-weight: normal; color: #495057;")
+            info_layout.addRow("Personne de contact:", contact_label)
+        
+        # Supplier phone
+        if self.supplier_order.supplier and self.supplier_order.supplier.phone:
+            phone_label = QLabel(self.supplier_order.supplier.phone)
+            phone_label.setStyleSheet("font-weight: normal; color: #495057;")
+            info_layout.addRow("Téléphone:", phone_label)
+        
+        # Supplier email
+        if self.supplier_order.supplier and self.supplier_order.supplier.email:
+            email_label = QLabel(self.supplier_order.supplier.email)
+            email_label.setStyleSheet("font-weight: normal; color: #495057;")
+            info_layout.addRow("Email:", email_label)
+        
+        # Supplier address
+        if self.supplier_order.supplier and self.supplier_order.supplier.address:
+            address_label = QLabel(self.supplier_order.supplier.address)
+            address_label.setStyleSheet("font-weight: normal; color: #495057;")
+            address_label.setWordWrap(True)
+            info_layout.addRow("Adresse:", address_label)
+        
+        # Add separator
+        separator = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet("color: #dee2e6;")
+        info_layout.addRow(separator)
+        
+        # Order information
         # Order date
         order_date = "N/A"
         if self.supplier_order.order_date:
@@ -137,6 +169,20 @@ class SupplierOrderDetailDialog(QDialog):
         date_label.setStyleSheet("font-weight: normal; color: #495057;")
         info_layout.addRow("Date de commande:", date_label)
         
+        # Creation timestamp
+        if hasattr(self.supplier_order, 'created_at') and self.supplier_order.created_at:
+            try:
+                created_at_str = str(self.supplier_order.created_at)
+                # Try to format it nicely if it looks like a datetime
+                if "T" in created_at_str or " " in created_at_str:
+                    # Basic cleanup of ISO format
+                    created_at_str = created_at_str.replace("T", " à ").split(".")[0]
+                created_label = QLabel(created_at_str)
+                created_label.setStyleSheet("font-weight: normal; color: #6c757d; font-size: 12px;")
+                info_layout.addRow("Créée le:", created_label)
+            except (AttributeError, TypeError, ValueError):
+                pass
+        
         # Status
         status_value = self.supplier_order.status.value if hasattr(self.supplier_order.status, 'value') else str(self.supplier_order.status)
         status_display = {
@@ -146,8 +192,23 @@ class SupplierOrderDetailDialog(QDialog):
         }.get(status_value.lower(), status_value)
         
         status_info_label = QLabel(status_display)
-        status_info_label.setStyleSheet("font-weight: normal; color: #495057;")
+        status_info_label.setStyleSheet("font-weight: bold; color: #495057;")
         info_layout.addRow("Statut:", status_info_label)
+        
+        # Total amount
+        if hasattr(self.supplier_order, 'total_amount') and self.supplier_order.total_amount:
+            currency = getattr(self.supplier_order, 'currency', 'DZD')
+            total_label = QLabel(f"{self.supplier_order.total_amount:,.2f} {currency}")
+            total_label.setStyleSheet("font-weight: bold; color: #28a745; font-size: 14px;")
+            info_layout.addRow("Total UTTC:", total_label)
+        
+        # Line items summary
+        if hasattr(self.supplier_order, 'line_items') and self.supplier_order.line_items:
+            items_count = len(self.supplier_order.line_items)
+            clients_count = len(set(item.client_id for item in self.supplier_order.line_items if hasattr(item, 'client_id')))
+            summary_label = QLabel(f"{items_count} article(s) pour {clients_count} client(s)")
+            summary_label.setStyleSheet("font-weight: normal; color: #6c757d;")
+            info_layout.addRow("Articles:", summary_label)
         
         layout.addWidget(info_group)
     

@@ -228,9 +228,10 @@ class MainWindow(QMainWindow):
         self.suppliers_grid = self.clients_suppliers_split.left_grid
         self.clients_grid = self.clients_suppliers_split.right_grid
         
-        # 2. Devis (Keep as is - perfect and without errors)
+        # 2. Devis (Enhanced with comprehensive information)
         self.orders_grid = DataGrid(
-            ["ID", "Référence", "Client", "Date", "Statut", "Dimensions", "Quantités", "Total (DA)", "Notes"]
+            ["ID", "Référence", "Client", "Contact", "Date Création", "Date Validité", "Statut", 
+             "Articles", "Dimensions", "Quantités", "Types Carton", "Total HT (DA)", "Notes"]
         )
         self.orders_grid.add_action_button("➕ Devis", self._new_quotation)
         
@@ -241,7 +242,7 @@ class MainWindow(QMainWindow):
         
         # 3. Commande de matière première (renamed from Cmd. Fournisseurs)
         self.supplier_orders_grid = DataGrid(
-            ["ID", "Référence", "Fournisseur", "Statut", "Date"]
+            ["ID", "Bon Commande", "Fournisseur", "Statut", "Date", "Total UTTC", "Nb Articles", "Clients"]
         )
         self.supplier_orders_grid.add_action_button("➕ Nouvelle", self._new_supplier_order)
         
@@ -289,26 +290,77 @@ class MainWindow(QMainWindow):
         self.supplier_orders_grid.contextMenuAboutToShow.connect(self._customize_supplier_orders_context_menu)
 
     def _customize_orders_context_menu(self, row: int, row_data: list, menu):
-        """Customize context menu based on quotation type"""
+        """Customize context menu based on quotation type and selection"""
         from PyQt6.QtGui import QAction
         
-        if not row_data or len(row_data) < 5:
-            return
+        selected_rows = self.orders_grid.get_selected_row_indices()
+        num_selected = len(selected_rows)
         
-        # Status is in column 4 (index 4): "Devis Initial" or "Devis Final"
-        status = row_data[4] if len(row_data) > 4 else ""
-        
-        # Only add "Créer commande matières" for Final Devis
-        if status == "Devis Final":
-            # Add separator if there are already actions
-            if menu.actions():
-                menu.addSeparator()
+        # Hide single-item actions if multiple items are selected
+        is_single_selection = num_selected <= 1
+        for action in menu.actions():
+            if action.text() in ["Modifier devis", "Imprimer devis"]:
+                action.setVisible(is_single_selection)
+
+        # Add/update actions for multi-selection
+        if num_selected > 1:
+            # Find existing multi-delete action or create it
+            multi_delete_action = next((a for a in menu.actions() if a.text().startswith("Supprimer les")), None)
+            if not multi_delete_action:
+                multi_delete_action = QAction(f"Supprimer les {num_selected} devis", self)
+                multi_delete_action.triggered.connect(lambda: self._handle_orders_context_menu("multi_delete", -1, []))
+                menu.addAction(multi_delete_action)
+            else:
+                multi_delete_action.setText(f"Supprimer les {num_selected} devis")
+                multi_delete_action.setVisible(True)
             
-            # Add dynamic action for creating supplier order
-            action = QAction("Créer commande matières", self)
-            action.triggered.connect(lambda checked: 
-                                   self.orders_grid.contextMenuActionTriggered.emit("create_supplier_order", row, row_data))
-            menu.addAction(action)
+            # Hide the single delete action
+            single_delete_action = next((a for a in menu.actions() if a.text() == "Supprimer devis"), None)
+            if single_delete_action:
+                single_delete_action.setVisible(False)
+        else:
+            # Ensure single delete is visible and multi-delete is hidden
+            single_delete_action = next((a for a in menu.actions() if a.text() == "Supprimer devis"), None)
+            if single_delete_action:
+                single_delete_action.setVisible(True)
+            multi_delete_action = next((a for a in menu.actions() if a.text().startswith("Supprimer les")), None)
+            if multi_delete_action:
+                multi_delete_action.setVisible(False)
+
+        # Logic for "Créer commande matières"
+        can_create_order = False
+        if num_selected == 1:
+            status = row_data[4] if len(row_data) > 4 else ""
+            if status == "Devis Final":
+                can_create_order = True
+        elif num_selected > 1:
+            # Check if all selected are Final Devis
+            all_final = True
+            for r_idx in selected_rows:
+                status = self.orders_grid.get_row_data(r_idx)[4]
+                if status != "Devis Final":
+                    all_final = False
+                    break
+            if all_final:
+                can_create_order = True
+
+        # Find or create the "Créer commande" action
+        create_order_action = next((a for a in menu.actions() if a.text().startswith("Créer commande")), None)
+        if can_create_order:
+            if not create_order_action:
+                action_text = f"Créer commande matières ({num_selected} devis)" if num_selected > 1 else "Créer commande matières"
+                create_order_action = QAction(action_text, self)
+                create_order_action.triggered.connect(lambda: self._handle_orders_context_menu("create_supplier_order", row, row_data))
+                
+                # Add separator if needed
+                if menu.actions() and not menu.actions()[-1].isSeparator():
+                    menu.addSeparator()
+                menu.addAction(create_order_action)
+            else:
+                create_order_action.setText(f"Créer commande matières ({num_selected} devis)" if num_selected > 1 else "Créer commande matières")
+                create_order_action.setVisible(True)
+        elif create_order_action:
+            create_order_action.setVisible(False)
 
     def _on_quotation_double_click(self, row: int):
         """Handle double-click on quotation row to show detailed view"""
@@ -353,6 +405,20 @@ class MainWindow(QMainWindow):
 
     def _handle_orders_context_menu(self, action_name: str, row: int, row_data: list):
         """Handle context menu actions for orders grid (quotations only)"""
+        # Handle multi-selection actions
+        if action_name == "multi_delete":
+            self._delete_multiple_quotations()
+            return
+            
+        # Handle multi-quotation supplier order creation
+        if action_name == "create_supplier_order":
+            selected_rows_data = self.orders_grid.get_selected_rows_data()
+            if len(selected_rows_data) > 1:
+                self._create_supplier_order_for_multiple_quotations(selected_rows_data)
+                return
+            # Fall through to single quotation handling
+            
+        # Single selection actions
         if not row_data or len(row_data) < 2:
             return
             
@@ -924,6 +990,237 @@ class MainWindow(QMainWindow):
             finally:
                 session.close()
 
+    def _delete_multiple_quotations(self):
+        """Delete multiple selected quotations"""
+        selected_rows_data = self.orders_grid.get_selected_rows_data()
+        if not selected_rows_data:
+            QMessageBox.warning(self, 'Erreur', 'Aucun devis sélectionné')
+            return
+            
+        quotation_count = len(selected_rows_data)
+        references = [row[1] for row in selected_rows_data if len(row) > 1]
+        
+        reply = QMessageBox.question(
+            self, 
+            'Confirmation', 
+            f'Êtes-vous sûr de vouloir supprimer {quotation_count} devis ?\n\n'
+            f'Devis: {", ".join(references[:5])}'
+            f'{" et plus..." if len(references) > 5 else ""}\n\n'
+            f'Cette action est irréversible.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            session = SessionLocal()
+            try:
+                deleted_count = 0
+                deleted_refs = []
+                
+                for row_data in selected_rows_data:
+                    if len(row_data) < 2:
+                        continue
+                        
+                    try:
+                        quotation_id = int(row_data[0])
+                        reference = row_data[1]
+                        
+                        quotation = session.get(Quotation, quotation_id)
+                        if quotation:
+                            session.delete(quotation)
+                            deleted_count += 1
+                            deleted_refs.append(reference)
+                    except (ValueError, TypeError):
+                        continue
+                
+                if deleted_count > 0:
+                    session.commit()
+                    QMessageBox.information(self, 'Succès', f'{deleted_count} devis supprimés')
+                    self.dashboard.add_activity("S", f"{deleted_count} devis supprimés: {', '.join(deleted_refs[:3])}", "#DC3545")
+                    self.refresh_all()
+                else:
+                    QMessageBox.warning(self, 'Erreur', 'Aucun devis valide trouvé pour suppression')
+                    
+            except Exception as e:
+                session.rollback()
+                QMessageBox.critical(self, 'Erreur', f'Erreur lors de la suppression: {str(e)}')
+            finally:
+                session.close()
+
+    def _create_supplier_order_for_multiple_quotations(self, selected_rows_data: list[list[str]]):
+        """Create a single supplier order from multiple quotations"""
+        from models.orders import Quotation, SupplierOrder, SupplierOrderLineItem
+        from models.suppliers import Supplier
+        from utils.helpers import generate_reference
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QComboBox, QLabel, QPushButton, QHBoxLayout, QTextEdit
+        
+        session = SessionLocal()
+        try:
+            # Get all quotations
+            quotation_ids = []
+            for row_data in selected_rows_data:
+                if len(row_data) < 2:
+                    continue
+                try:
+                    quotation_ids.append(int(row_data[0]))
+                except (ValueError, TypeError):
+                    continue
+            
+            if not quotation_ids:
+                QMessageBox.warning(self, 'Erreur', 'Aucun devis valide sélectionné')
+                return
+                
+            quotations = session.query(Quotation).filter(Quotation.id.in_(quotation_ids)).all()
+            
+            # Verify all are final devis
+            non_final = [q.reference for q in quotations if q.is_initial]
+            if non_final:
+                QMessageBox.warning(self, 'Erreur', 
+                                  f'Les devis suivants sont initiaux et ne peuvent pas être utilisés: {", ".join(non_final)}')
+                return
+            
+            # Get suppliers
+            suppliers = session.query(Supplier).all()
+            if not suppliers:
+                QMessageBox.warning(self, 'Erreur', 'Aucun fournisseur disponible. Créez d\'abord un fournisseur.')
+                return
+            
+            # Create simple supplier selection dialog
+            dialog = QDialog(self)
+            dialog.setWindowTitle('Créer Commande Matières Premières')
+            dialog.setMinimumWidth(500)
+            layout = QVBoxLayout(dialog)
+            
+            # Show quotations summary
+            summary_label = QLabel(f'Création de commande pour {len(quotations)} devis:')
+            summary_label.setStyleSheet("font-weight: bold; font-size: 14px; margin-bottom: 10px;")
+            layout.addWidget(summary_label)
+            
+            quotations_text = QTextEdit()
+            quotations_text.setMaximumHeight(100)
+            quotations_summary = "\n".join([f"• {q.reference} - {q.client.name if q.client else 'N/A'}" for q in quotations])
+            quotations_text.setPlainText(quotations_summary)
+            quotations_text.setReadOnly(True)
+            layout.addWidget(quotations_text)
+            
+            # Supplier selection
+            layout.addWidget(QLabel('Fournisseur:'))
+            supplier_combo = QComboBox()
+            for supplier in suppliers:
+                supplier_combo.addItem(supplier.name, supplier.id)
+            layout.addWidget(supplier_combo)
+            
+            # Notes
+            layout.addWidget(QLabel('Notes:'))
+            notes_edit = QTextEdit()
+            notes_edit.setMaximumHeight(80)
+            notes_edit.setPlainText(f"Commande générée depuis {len(quotations)} devis")
+            layout.addWidget(notes_edit)
+            
+            # Buttons
+            button_layout = QHBoxLayout()
+            create_btn = QPushButton('Créer Commande')
+            cancel_btn = QPushButton('Annuler')
+            button_layout.addWidget(cancel_btn)
+            button_layout.addWidget(create_btn)
+            layout.addLayout(button_layout)
+            
+            create_btn.clicked.connect(dialog.accept)
+            cancel_btn.clicked.connect(dialog.reject)
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                supplier_id = supplier_combo.currentData()
+                if not supplier_id:
+                    QMessageBox.warning(self, 'Erreur', 'Veuillez sélectionner un fournisseur')
+                    return
+                
+                # Generate BC reference
+                bc_ref = generate_reference("BC")
+                
+                # Create supplier order
+                supplier_order = SupplierOrder(
+                    supplier_id=supplier_id,
+                    bon_commande_ref=bc_ref,
+                    notes=notes_edit.toPlainText()
+                )
+                session.add(supplier_order)
+                session.flush()  # Get the ID
+                
+                # Create line items from all quotations
+                line_number = 1
+                total_amount = Decimal('0')
+                
+                for quotation in quotations:
+                    for line_item in quotation.line_items:
+                        if not (line_item.length_mm and line_item.width_mm and line_item.height_mm):
+                            continue
+                            
+                        # Calculate plaque dimensions
+                        largeur_caisse = line_item.width_mm
+                        longueur_caisse = line_item.length_mm
+                        hauteur_caisse = line_item.height_mm
+                        
+                        largeur_plaque = largeur_caisse + hauteur_caisse
+                        longueur_plaque = (largeur_caisse + longueur_caisse) * 2
+                        rabat_plaque = hauteur_caisse // 2
+                        
+                        # Extract numeric quantity
+                        import re
+                        numbers = re.findall(r'\d+', str(line_item.quantity))
+                        numeric_quantity = int(numbers[-1]) if numbers else 1
+                        
+                        # Estimate price (you may want to adjust this logic)
+                        if line_item.unit_price:
+                            prix_unitaire = float(str(line_item.unit_price))
+                        else:
+                            prix_unitaire = 100.0
+                        prix_uttc = Decimal(str(prix_unitaire * 1.19))  # Add 19% tax as example
+                        line_total = prix_uttc * numeric_quantity
+                        
+                        supplier_line_item = SupplierOrderLineItem(
+                            supplier_order_id=supplier_order.id,
+                            client_id=quotation.client_id,
+                            line_number=line_number,
+                            code_article=f"ART-{quotation.reference}-{line_item.line_number}",
+                            caisse_length_mm=longueur_caisse,
+                            caisse_width_mm=largeur_caisse,
+                            caisse_height_mm=hauteur_caisse,
+                            plaque_width_mm=largeur_plaque,
+                            plaque_length_mm=longueur_plaque,
+                            plaque_flap_mm=rabat_plaque,
+                            prix_uttc_plaque=prix_uttc,
+                            quantity=numeric_quantity,
+                            total_line_amount=line_total,
+                            cardboard_type=line_item.cardboard_type,
+                            notes=f"Depuis devis {quotation.reference} - {line_item.description}"
+                        )
+                        session.add(supplier_line_item)
+                        total_amount += line_total
+                        line_number += 1
+                
+                # Update total amount using SQLAlchemy update
+                from sqlalchemy import update
+                stmt = update(SupplierOrder).where(SupplierOrder.id == supplier_order.id).values(total_amount=total_amount)
+                session.execute(stmt)
+                session.commit()
+                
+                QMessageBox.information(
+                    self, 
+                    'Succès', 
+                    f'Commande matières {bc_ref} créée avec succès!\n\n'
+                    f'Nombre d\'articles: {line_number - 1}\n'
+                    f'Total: {float(total_amount):,.2f} DZD\n'
+                    f'Basée sur {len(quotations)} devis'
+                )
+                self.dashboard.add_activity("CM", f"Commande matières: {bc_ref} ({len(quotations)} devis)", "#6F42C1")
+                self.refresh_all()
+                
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création: {str(e)}')
+        finally:
+            session.close()
+
     def _create_supplier_order_for_client_order(self, order_id: int, reference: str):
         """Create a supplier order for raw materials based on client order"""
         session = SessionLocal()
@@ -1030,41 +1327,86 @@ class MainWindow(QMainWindow):
             orders_data = []
             row_colors = []
             
-            # Add quotations to the list
+            # Add quotations to the list with comprehensive information
             for q in quotations:
                 # Skip quotations without valid client relationships
                 if not q.client:
                     continue
                     
-                # Get dimensions summary from line items
+                # Collect detailed information from line items
+                line_items_count = len(q.line_items)
                 dimensions = []
                 quantities = []
+                cardboard_types = set()
+                
                 for item in q.line_items:
+                    # Collect dimensions
                     if item.length_mm and item.width_mm and item.height_mm:
                         dimensions.append(f"{item.length_mm}×{item.width_mm}×{item.height_mm}")
+                    
+                    # Collect quantities
                     quantities.append(str(item.quantity))
+                    
+                    # Collect cardboard types
+                    if item.cardboard_type:
+                        cardboard_types.add(item.cardboard_type)
                 
-                dimensions_str = ", ".join(str(d) for d in dimensions[:2])  # Show first 2 dimensions
-                if len(dimensions) > 2:
-                    dimensions_str += f" (+{len(dimensions)-2})"
+                # Format dimensions display
+                if dimensions:
+                    dimensions_str = ", ".join(dimensions[:2])  # Show first 2 dimensions
+                    if len(dimensions) > 2:
+                        dimensions_str += f" (+{len(dimensions)-2} autres)"
+                else:
+                    dimensions_str = "N/A"
                 
-                quantities_str = ", ".join(str(q) for q in quantities[:2])  # Show first 2 quantities  
-                if len(quantities) > 2:
-                    quantities_str += f" (+{len(quantities)-2})"
+                # Format quantities display
+                if quantities:
+                    quantities_str = ", ".join(quantities[:2])  # Show first 2 quantities  
+                    if len(quantities) > 2:
+                        quantities_str += f" (+{len(quantities)-2} autres)"
+                else:
+                    quantities_str = "N/A"
+                
+                # Format cardboard types
+                if cardboard_types:
+                    cardboard_str = ", ".join(sorted(cardboard_types)[:2])
+                    if len(cardboard_types) > 2:
+                        cardboard_str += f" (+{len(cardboard_types)-2} autres)"
+                else:
+                    cardboard_str = "Standard"
                 
                 # Determine status based on type
                 status = "Devis Initial" if q.is_initial else "Devis Final"
+                
+                # Client contact information
+                client_contact = ""
+                if q.client.contact_name:
+                    client_contact = q.client.contact_name
+                elif q.client.phone:
+                    client_contact = q.client.phone
+                elif q.client.email:
+                    client_contact = q.client.email
+                else:
+                    client_contact = "N/A"
+                
+                # Format dates
+                issue_date_str = str(q.issue_date) if q.issue_date else "N/A"
+                valid_until_str = str(q.valid_until) if q.valid_until else "N/A"
                 
                 orders_data.append([
                     str(q.id),
                     str(q.reference or ""),
                     str(q.client.name if q.client else "N/A"),
-                    str(q.issue_date) if q.issue_date else "",
+                    str(client_contact),
+                    str(issue_date_str),
+                    str(valid_until_str),
                     str(status),
-                    str(dimensions_str or "N/A"),
-                    str(quantities_str or "N/A"), 
+                    f"{line_items_count} article(s)",
+                    str(dimensions_str),
+                    str(quantities_str),
+                    str(cardboard_str),
                     f"{q.total_amount:,.2f}" if q.total_amount is not None else "0.00",
-                    str((q.notes[:30] + "..." if q.notes and len(q.notes) > 30 else q.notes) or "")
+                    str((q.notes[:25] + "..." if q.notes and len(q.notes) > 25 else q.notes) or "")
                 ])
                 
                 # Color coding: light blue for initial devis, light green for final devis
@@ -1075,8 +1417,8 @@ class MainWindow(QMainWindow):
                 
             self.orders_grid.load_rows_with_colors(orders_data, row_colors)
             
-            # Refresh supplier orders
-            supplier_orders = session.query(SupplierOrder).all()
+            # Refresh supplier orders with comprehensive information
+            supplier_orders = session.query(SupplierOrder).join(SupplierOrder.supplier).all()
             
             # Map internal status values to display labels
             status_display_map = {
@@ -1085,17 +1427,63 @@ class MainWindow(QMainWindow):
                 'commande_arrivee': 'Commande Arrivée'
             }
             
-            supplier_orders_data = [
-                [
+            supplier_orders_data = []
+            supplier_order_colors = []
+            
+            for so in supplier_orders:
+                # Count line items and get unique clients
+                line_items_count = len(so.line_items) if hasattr(so, 'line_items') and so.line_items else 0
+                
+                # Get unique clients from line items
+                clients_set = set()
+                if hasattr(so, 'line_items') and so.line_items:
+                    for item in so.line_items:
+                        if hasattr(item, 'client') and item.client:
+                            clients_set.add(item.client.name)
+                
+                clients_display = ", ".join(sorted(clients_set)) if clients_set else "N/A"
+                if len(clients_display) > 50:
+                    clients_display = clients_display[:47] + "..."
+                
+                # Format date
+                order_date_str = ""
+                if so.order_date:
+                    try:
+                        # Import datetime to handle conversion
+                        import datetime
+                        if isinstance(so.order_date, datetime.date):
+                            order_date_str = so.order_date.strftime("%d/%m/%Y")
+                        else:
+                            order_date_str = str(so.order_date)
+                    except (AttributeError, TypeError):
+                        order_date_str = str(so.order_date)
+                
+                # Format total amount
+                total_amount_str = f"{so.total_amount:,.2f} {so.currency}" if hasattr(so, 'total_amount') and so.total_amount else "0.00 DZD"
+                
+                supplier_orders_data.append([
                     str(so.id),
-                    so.reference or "",
+                    getattr(so, 'bon_commande_ref', getattr(so, 'reference', '')) or "",  # Use new field or fallback
                     so.supplier.name if so.supplier else "N/A",
                     status_display_map.get(so.status.value if so.status else "", "N/A"),
-                    str(so.order_date) if so.order_date else "",
-                ]
-                for so in supplier_orders
-            ]
-            self.supplier_orders_grid.load_rows(supplier_orders_data)
+                    order_date_str,
+                    total_amount_str,
+                    str(line_items_count),
+                    clients_display
+                ])
+                
+                # Color coding based on status
+                status_value = so.status.value if so.status else "commande_initial"
+                if status_value == "commande_initial":
+                    supplier_order_colors.append("#FFF3E0")  # Light orange for initial
+                elif status_value == "commande_passee":
+                    supplier_order_colors.append("#E3F2FD")  # Light blue for ordered
+                elif status_value == "commande_arrivee":
+                    supplier_order_colors.append("#E8F5E8")  # Light green for received
+                else:
+                    supplier_order_colors.append("#FFFFFF")  # White for unknown status
+            
+            self.supplier_orders_grid.load_rows_with_colors(supplier_orders_data, supplier_order_colors)
             
             # Refresh stock - Raw materials (receptions) on left side
             receptions = session.query(Reception).all()
