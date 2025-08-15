@@ -327,28 +327,28 @@ class MainWindow(QMainWindow):
             if multi_delete_action:
                 multi_delete_action.setVisible(False)
 
-        # Logic for "Créer commande matières"
+        # Logic for "Transformer en commande de matière première"
         can_create_order = False
         if num_selected == 1:
-            status = row_data[4] if len(row_data) > 4 else ""
+            status = row_data[6] if len(row_data) > 6 else ""  # Column 6 is "Statut"
             if status == "Devis Final":
                 can_create_order = True
         elif num_selected > 1:
             # Check if all selected are Final Devis
             all_final = True
             for r_idx in selected_rows:
-                status = self.orders_grid.get_row_data(r_idx)[4]
+                status = self.orders_grid.get_row_data(r_idx)[6]  # Column 6 is "Statut"
                 if status != "Devis Final":
                     all_final = False
                     break
             if all_final:
                 can_create_order = True
 
-        # Find or create the "Créer commande" action
-        create_order_action = next((a for a in menu.actions() if a.text().startswith("Créer commande")), None)
+        # Find or create the "Transformer en commande de matière première" action
+        create_order_action = next((a for a in menu.actions() if a.text().startswith("Transformer en commande")), None)
         if can_create_order:
             if not create_order_action:
-                action_text = f"Créer commande matières ({num_selected} devis)" if num_selected > 1 else "Créer commande matières"
+                action_text = f"Transformer en commande de matière première ({num_selected} devis)" if num_selected > 1 else "Transformer en commande de matière première"
                 create_order_action = QAction(action_text, self)
                 create_order_action.triggered.connect(lambda: self._handle_orders_context_menu("create_supplier_order", row, row_data))
                 
@@ -357,7 +357,7 @@ class MainWindow(QMainWindow):
                     menu.addSeparator()
                 menu.addAction(create_order_action)
             else:
-                create_order_action.setText(f"Créer commande matières ({num_selected} devis)" if num_selected > 1 else "Créer commande matières")
+                create_order_action.setText(f"Transformer en commande de matière première ({num_selected} devis)" if num_selected > 1 else "Transformer en commande de matière première")
                 create_order_action.setVisible(True)
         elif create_order_action:
             create_order_action.setVisible(False)
@@ -443,7 +443,7 @@ class MainWindow(QMainWindow):
             self._delete_quotation_by_id(order_id, reference)
         elif action_name == "create_supplier_order":
             # Check if this is a Final Devis before allowing supplier order creation
-            if len(row_data) > 4 and row_data[4] == "Devis Final":
+            if len(row_data) > 6 and row_data[6] == "Devis Final":  # Column 6 is "Statut"
                 self._create_supplier_order_for_quotation(order_id, reference)
             else:
                 QMessageBox.information(self, 'Information', 
@@ -647,7 +647,7 @@ class MainWindow(QMainWindow):
             'Pour créer une commande matières avec calculs automatiques:\n\n'
             '1. Allez dans l\'onglet "Commandes"\n'
             '2. Clic droit sur une commande client\n'
-            '3. Sélectionnez "Créer commande matières"\n\n'
+            '3. Sélectionnez "Transformer en commande de matière première"\n\n'
             'Les dimensions des plaques seront calculées automatiquement.'
         )
 
