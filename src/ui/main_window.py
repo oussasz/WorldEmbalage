@@ -28,6 +28,7 @@ from ui.widgets.split_view import SplitView
 from ui.styles import IconManager
 from services.order_service import OrderService
 from services.pdf_form_filler import PDFFormFiller, PDFFillError
+from services.pdf_export_service import export_supplier_order_to_pdf
 from typing import cast, Any
 from models.orders import QuotationLineItem, ClientOrderLineItem
 
@@ -282,6 +283,7 @@ class MainWindow(QMainWindow):
         # Supplier orders context menu
         self.supplier_orders_grid.add_context_action("edit", "Modifier commande")
         self.supplier_orders_grid.add_context_action("delete", "Supprimer commande")
+        self.supplier_orders_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
         self.supplier_orders_grid.add_context_action("status_initial", "→ Commande Initial")
         self.supplier_orders_grid.add_context_action("status_ordered", "→ Commande Passée")
         self.supplier_orders_grid.add_context_action("status_received", "→ Commande Arrivée")
@@ -497,8 +499,8 @@ class MainWindow(QMainWindow):
                 # La longueur de plaque = (largeur de caisse + longueur de carton) * 2
                 longueur_plaque = (largeur_caisse + longueur_caisse) * 2
                 
-                # Rabat de plaque = hauteur de caisse / 2
-                rabat_plaque = hauteur_caisse // 2  # Use integer division
+                # Rabat de plaque = largeur de caisse / 2
+                rabat_plaque = largeur_caisse // 2  # Use integer division
                 
                 # Extract numeric quantity
                 import re
@@ -1098,8 +1100,8 @@ class MainWindow(QMainWindow):
                     # La longueur de plaque = (largeur de caisse + longueur de carton) * 2
                     longueur_plaque = (largeur_caisse + longueur_caisse) * 2
                     
-                    # Rabat de plaque = hauteur de caisse / 2
-                    rabat_plaque = hauteur_caisse // 2  # Use integer division
+                    # Rabat de plaque = largeur de caisse / 2
+                    rabat_plaque = largeur_caisse // 2  # Use integer division
                     
                     # Extract numeric quantity
                     import re
@@ -1580,6 +1582,8 @@ class MainWindow(QMainWindow):
             self._edit_supplier_order_by_id(order_id, reference)
         elif action_name == "delete":
             self._delete_supplier_order_by_id(order_id, reference)
+        elif action_name == "export_pdf":
+            self._export_supplier_order_pdf(order_id, reference)
         elif action_name.startswith("status_"):
             status_map = {
                 "status_initial": "commande_initial",
@@ -1589,6 +1593,49 @@ class MainWindow(QMainWindow):
             new_status = status_map.get(action_name)
             if new_status:
                 self._change_supplier_order_status(order_id, reference, new_status)
+
+    def _export_supplier_order_pdf(self, order_id: int, reference: str):
+        """Export supplier order as a professional PDF document using template"""
+        try:
+            # Generate PDF using the template-based export service
+            pdf_path = export_supplier_order_to_pdf(order_id)
+            
+            if pdf_path:
+                # Show success message with option to open file
+                reply = QMessageBox.question(
+                    self,
+                    'PDF Généré',
+                    f'Le PDF de la commande {reference} a été généré avec succès.\n\n'
+                    f'Fichier: {pdf_path.name}\n\n'
+                    'Voulez-vous ouvrir le fichier?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    # Open PDF with default system application
+                    if os.name == 'nt':  # Windows
+                        os.startfile(str(pdf_path))
+                    elif os.name == 'posix':  # macOS and Linux
+                        subprocess.run(['xdg-open', str(pdf_path)])
+                    
+                # Log activity
+                self.dashboard.add_activity("PDF", f"Export PDF commande: {reference}", "#DC3545")
+                
+            else:
+                QMessageBox.warning(
+                    self,
+                    'Erreur',
+                    f'Erreur lors de la génération du PDF pour la commande {reference}.\n\n'
+                    'Vérifiez que les données de la commande sont complètes et que le template page.pdf est disponible.'
+                )
+                
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                'Erreur',
+                f'Erreur lors de l\'export PDF: {str(e)}'
+            )
 
     def _customize_supplier_orders_context_menu(self, row: int, row_data: list, menu):
         """Customize context menu based on supplier order status"""

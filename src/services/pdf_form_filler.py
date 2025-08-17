@@ -77,6 +77,118 @@ class PDFFormFiller:
             # Fallback to overlay method
             return self._fill_with_overlay(template_path, quotation_data, output_path)
     
+    def fill_supplier_order_template(self, order_data: Dict[str, Any], output_filename: str | None = None) -> Path:
+        """
+        Fill the supplier order PDF template with order data.
+        
+        Args:
+            order_data: Dictionary containing supplier order information
+            output_filename: Optional custom filename for output
+            
+        Returns:
+            Path to the generated PDF file
+        """
+        template_path = self.template_dir / "page.pdf"
+        
+        if not template_path.exists():
+            raise PDFFillError(f"Template not found: {template_path}")
+        
+        # Generate output filename if not provided
+        if not output_filename:
+            ref = order_data.get('reference', 'commande')
+            timestamp = date.today().strftime('%Y%m%d_%H%M%S')
+            output_filename = f"commande_matiere_{ref}_{timestamp}.pdf"
+        
+        output_path = self.output_dir / output_filename
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Try to use PyPDF2 for form filling if available
+        if self._ensure_pypdf_installed():
+            return self._fill_supplier_order_pypdf(template_path, order_data, output_path)
+        else:
+            # Fallback to overlay method
+            return self._fill_supplier_order_overlay(template_path, order_data, output_path)
+    
+    def _fill_supplier_order_pypdf(self, template_path: Path, data: Dict[str, Any], output_path: Path) -> Path:
+        """Fill supplier order PDF using PyPDF2 form fields."""
+        try:
+            import PyPDF2  # type: ignore
+        except ImportError:
+            raise PDFFillError("PyPDF2 not available")
+        
+        try:
+            with open(template_path, 'rb') as template_file:
+                pdf_reader = PyPDF2.PdfReader(template_file)
+                pdf_writer = PyPDF2.PdfWriter()
+                
+                # Check if PDF has form fields
+                if pdf_reader.get_fields():
+                    # Fill form fields
+                    field_data = self._prepare_supplier_order_form_data(data)
+                    
+                    for page in pdf_reader.pages:
+                        pdf_writer.add_page(page)
+                    
+                    # Update form fields
+                    pdf_writer.update_page_form_field_values(
+                        pdf_writer.pages[0], field_data
+                    )
+                    
+                    with open(output_path, 'wb') as output_file:
+                        pdf_writer.write(output_file)
+                else:
+                    # No form fields, use overlay method
+                    return self._fill_supplier_order_overlay(template_path, data, output_path)
+                    
+        except Exception as e:
+            raise PDFFillError(f"Failed to fill supplier order PDF with PyPDF2: {str(e)}")
+        
+        return output_path
+    
+    def _fill_supplier_order_overlay(self, template_path: Path, data: Dict[str, Any], output_path: Path) -> Path:
+        """Fill supplier order PDF by creating an overlay with positioned text."""
+        try:
+            import PyPDF2  # type: ignore
+        except ImportError:
+            # Fallback to simple copy with a warning
+            shutil.copy2(template_path, output_path)
+            print(f"Warning: PyPDF2 not available. Template copied to: {output_path}")
+            return output_path
+        
+        try:
+            # Create overlay with text
+            overlay_path = self._create_supplier_order_overlay(data)
+            
+            # Merge overlay with template
+            with open(template_path, 'rb') as template_file, \
+                 open(overlay_path, 'rb') as overlay_file:
+                
+                template_pdf = PyPDF2.PdfReader(template_file)
+                overlay_pdf = PyPDF2.PdfReader(overlay_file)
+                
+                pdf_writer = PyPDF2.PdfWriter()
+                
+                # Merge first page
+                template_page = template_pdf.pages[0]
+                overlay_page = overlay_pdf.pages[0]
+                template_page.merge_page(overlay_page)
+                pdf_writer.add_page(template_page)
+                
+                # Add remaining pages if any
+                for i in range(1, len(template_pdf.pages)):
+                    pdf_writer.add_page(template_pdf.pages[i])
+                
+                with open(output_path, 'wb') as output_file:
+                    pdf_writer.write(output_file)
+            
+            # Clean up temporary overlay file
+            Path(overlay_path).unlink(missing_ok=True)
+            
+        except Exception as e:
+            raise PDFFillError(f"Failed to create supplier order PDF overlay: {str(e)}")
+        
+        return output_path
+    
     def _fill_with_pypdf(self, template_path: Path, data: Dict[str, Any], output_path: Path) -> Path:
         """Fill PDF using PyPDF2 form fields."""
         try:
@@ -307,6 +419,192 @@ class PDFFormFiller:
         
         return temp_path
     
+    def _create_supplier_order_overlay(self, data: Dict[str, Any]) -> str:
+        """Create a transparent PDF overlay with positioned text for supplier orders."""
+        temp_fd, temp_path = tempfile.mkstemp(suffix='.pdf')
+        
+        try:
+            c = canvas.Canvas(temp_path, pagesize=A4)
+            width, height = A4
+            
+            # Add title "Bon de commande"
+            c.setFont("Helvetica-Bold", 20)
+            title_text = "Bon de commande"
+            title_width = c.stringWidth(title_text, "Helvetica-Bold", 20)
+            c.drawString((width - title_width) / 2, height - 150, title_text)
+            # Add confirmation text above the table
+            c.setFont("Helvetica", 11)
+            confirmation_text = "    Nous confirmons par la présente notre commande des plaques, selon les spécifications détaillées ci-après."
+
+            # Split text into lines if too long
+            text_width = c.stringWidth(confirmation_text, "Helvetica", 11)
+            if text_width > width - 90:  # If text is too wide, split it
+                words = confirmation_text.split()
+                lines = []
+                current_line = ""
+                for word in words:
+                    test_line = current_line + (" " if current_line else "") + word
+                    if c.stringWidth(test_line, "Helvetica", 11) <= width - 100:
+                        current_line = test_line
+                    else:
+                        if current_line:
+                            lines.append(current_line)
+                        current_line = word
+                if current_line:
+                    lines.append(current_line)
+                
+                # Draw each line
+                y_pos = height - 250
+                for line in lines:
+                    c.drawString(50, y_pos, line)
+                    y_pos -= 15
+            else:
+                # Single line
+                c.drawString(50, height - 250, confirmation_text)
+            # Set font
+            c.setFont("Helvetica", 10)
+            
+            # Position text fields for supplier order template (page.pdf)
+            field_map = {
+                "order_reference": f"N° : {data.get('reference', '')}",
+                "order_date": f"Date : {data.get('order_date', '')}",
+                "supplier_name": data.get('supplier_name', ''),
+                "supplier_contact": data.get('supplier_contact', ''),
+                "supplier_email": data.get('supplier_email', ''),
+                "supplier_phone": data.get('supplier_phone', ''),
+            }
+
+            # Coordinates for supplier order fields (adjust based on page.pdf template)
+            # Pour: (Supplier Information)
+            c.setFont("Helvetica-Bold", 12)
+            c.drawString(50, height - 165, "Pour:")
+            
+            coordinates = [
+                {"field": "order_reference", "x": 450, "y": 165},
+                {"field": "order_date", "x": 450, "y": 175},
+
+                {"field": "supplier_name", "x": 75, "y": 180},
+                {"field": "supplier_contact", "x": 75, "y": 195},
+                {"field": "supplier_email", "x": 75, "y": 210},
+                {"field": "supplier_phone", "x": 75, "y": 225}
+            ]
+
+            for item in coordinates:
+                field_name = item["field"]
+                if field_name in field_map and field_map[field_name]:
+                    # Set font styles for different fields
+                    if field_name == "supplier_name":
+                        c.setFont("Helvetica-Bold", 14)
+                    elif field_name == "order_reference":
+                        c.setFont("Helvetica-Bold", 12)
+                    else:
+                        c.setFont("Helvetica", 10)
+                    
+                    c.drawString(item["x"], height - item["y"], str(field_map[field_name]))
+
+            # Order items table
+            if 'order_items' in data and data['order_items']:
+                
+                table_data = [["N°", "R°", "Mesure", "Désignation", "Caractéristique", "Prix UTTC", "Quantité"]]
+                
+                total = Decimal('0')
+                
+                for idx, item in enumerate(data['order_items'], 1):
+                    # Calculate line total
+                    quantity = Decimal(str(item.get('estimated_quantity', 0)))
+                    unit_price = Decimal(str(item.get('unit_price', 0)))
+                    line_total = quantity * unit_price
+                    total += line_total
+                    
+                    # Build mesure de caisse string (box dimensions)
+                    mesure_caisse = ""
+                    if item.get('length_mm') and item.get('width_mm') and item.get('height_mm'):
+                        mesure_caisse = f"{item['length_mm']} / {item['width_mm']} / {item['height_mm']}"
+                    
+                    # Build designation de plaque string (plaque dimensions)
+                    # Note: These fields might need to be added to your data structure
+                    designation_plaque = ""
+                    if item.get('plaque_width_mm') and item.get('plaque_length_mm') and item.get('plaque_flap_mm'):
+                        designation_plaque = f"{item['plaque_width_mm']} / {item['plaque_length_mm']} / {item['plaque_flap_mm']}"
+                    else:
+                        # Fallback if plaque dimensions not available
+                        designation_plaque = "À définir"
+                    
+                    # Get plaque characteristics
+                    caracteristique = item.get('grammage', '') or item.get('cardboard_type', '') or "Standard"
+                    
+                    # Get reference de matière première (same as chosen in devis)
+                    reference_plaque = item.get('material_reference', '') or item.get('reference', '') or ""
+                    
+                    table_data.append([
+                        str(idx),
+                        reference_plaque,
+                        mesure_caisse,
+                        designation_plaque,
+                        caracteristique,
+                        f"{unit_price:.2f}",
+                        str(item.get('estimated_quantity', ''))
+                    ])
+
+                # Add total row
+                table_data.append(["", "", "", "", "", "TOTAL:", f"{total:.2f} DA"])
+
+                # Create and style the table
+                table = Table(table_data, colWidths=[20, 60, 90, 90, 70, 60, 50])
+                style = TableStyle([
+                    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0D47A1")),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                    ('FONTSIZE', (0, 0), (-1, -1), 8),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                    ('TOPPADDING', (0, 1), (-1, -1), 6),
+                    ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor("#BBDEFB")]),
+                    ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#E3F2FD")),  # Total row
+                    ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                    ('WORDWRAP', (0, 0), (-1, -1), True)
+                ])
+
+                table.setStyle(style)
+
+                # Position the table
+                table_width, table_height = table.wrap(0, 0)
+                x_position = (width - table_width) / 2
+                y_position = height - 400  # Fixed position for table
+                table.wrapOn(c, width, height)
+                table.drawOn(c, x_position, y_position)
+
+            # Add signature section in the right corner
+            c.setFont("Helvetica", 10)
+            signature_x = width - 200  # Right side positioning
+            signature_y = 150  # Bottom area
+            
+            # Get current date
+            from datetime import date
+            current_date = date.today().strftime('%d/%m/%Y')
+            
+            c.drawString(signature_x, signature_y, "Signateur")
+            c.drawString(signature_x, signature_y - 20, f"Fait le {current_date} à ")
+            
+            # Add a line for signature
+            c.line(signature_x, signature_y - 60, signature_x + 150, signature_y - 60)
+
+            c.showPage()
+            c.save()
+            
+        except Exception as e:
+            raise PDFFillError(f"Failed to create supplier order overlay: {str(e)}")
+        finally:
+            # Close the file descriptor
+            import os
+            os.close(temp_fd)
+        
+        return temp_path
+    
     def _prepare_form_data(self, data: Dict[str, Any]) -> Dict[str, str]:
         """Prepare data for PDF form fields."""
         form_data = {}
@@ -317,6 +615,28 @@ class PDFFormFiller:
             'client_name': ['client', 'client_name', 'customer'],
             'issue_date': ['date', 'issue_date', 'date_emission'],
             'valid_until': ['valid_until', 'validity', 'expiry'],
+            'total_amount': ['total', 'total_amount', 'amount'],
+            'notes': ['notes', 'remarks', 'comments']
+        }
+        
+        for data_key, form_fields in field_mappings.items():
+            if data_key in data:
+                value = str(data[data_key])
+                for field_name in form_fields:
+                    form_data[field_name] = value
+        
+        return form_data
+    
+    def _prepare_supplier_order_form_data(self, data: Dict[str, Any]) -> Dict[str, str]:
+        """Prepare data for supplier order PDF form fields."""
+        form_data = {}
+        
+        # Map data to common form field names for supplier orders
+        field_mappings = {
+            'reference': ['reference', 'ref', 'numero', 'order_number'],
+            'supplier_name': ['supplier', 'supplier_name', 'vendor'],
+            'order_date': ['date', 'order_date', 'date_commande'],
+            'expected_delivery_date': ['delivery_date', 'expected_delivery', 'livraison'],
             'total_amount': ['total', 'total_amount', 'amount'],
             'notes': ['notes', 'remarks', 'comments']
         }
