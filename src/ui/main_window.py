@@ -16,6 +16,8 @@ from models.orders import SupplierOrderStatus, ClientOrderStatus, Reception, Quo
 from models.production import ProductionBatch
 from ui.dialogs.supplier_dialog import SupplierDialog
 from ui.dialogs.client_dialog import ClientDialog
+from ui.dialogs.supplier_detail_dialog import SupplierDetailDialog
+from ui.dialogs.client_detail_dialog import ClientDetailDialog
 from ui.dialogs.raw_material_order_dialog import RawMaterialOrderDialog
 from ui.dialogs.quotation_dialog import QuotationDialog
 from ui.dialogs.edit_quotation_dialog import EditQuotationDialog
@@ -219,8 +221,8 @@ class MainWindow(QMainWindow):
         
         # 1. Client et Fournisseur (Split view)
         self.clients_suppliers_split = SplitView(
-            "Fournisseurs", ["ID", "Nom", "Contact", "Téléphone", "Email", "Adresse"],
-            "Clients", ["ID", "Nom", "Contact", "Téléphone", "Email", "Adresse"]
+            "Fournisseurs", ["ID", "Nom", "Téléphone", "Email", "Adresse"],
+            "Clients", ["ID", "Nom", "Téléphone", "Email", "Adresse"]
         )
         self.clients_suppliers_split.add_left_action_button("➕ Nouveau Fournisseur", self._new_supplier)
         self.clients_suppliers_split.add_right_action_button("➕ Nouveau Client", self._new_client)
@@ -232,7 +234,7 @@ class MainWindow(QMainWindow):
         
         # 2. Devis (Enhanced with comprehensive information)
         self.orders_grid = DataGrid(
-            ["ID", "Référence", "Client", "Contact", "Date Création", "Date Validité", "Statut", 
+            ["ID", "Référence", "Client", "Date Création", "Date Validité", "Statut", 
              "Articles", "Dimensions", "Quantités", "Types Carton", "Total HT (DA)", "Notes"]
         )
         self.orders_grid.add_action_button("➕ Devis", self._new_quotation)
@@ -270,6 +272,24 @@ class MainWindow(QMainWindow):
 
     def _setup_context_menus(self):
         """Setup context menus for data grids"""
+        # Suppliers context menu
+        if self.suppliers_grid:
+            self.suppliers_grid.add_context_action("edit", "✏️ Modifier fournisseur")
+            self.suppliers_grid.add_context_action("delete", "🗑️ Supprimer fournisseur")
+            
+            # Connect suppliers context menu signals
+            self.suppliers_grid.contextMenuActionTriggered.connect(self._handle_suppliers_context_menu)
+            self.suppliers_grid.rowDoubleClicked.connect(self._on_supplier_double_click)
+        
+        # Clients context menu
+        if self.clients_grid:
+            self.clients_grid.add_context_action("edit", "✏️ Modifier client")
+            self.clients_grid.add_context_action("delete", "🗑️ Supprimer client")
+            
+            # Connect clients context menu signals
+            self.clients_grid.contextMenuActionTriggered.connect(self._handle_clients_context_menu)
+            self.clients_grid.rowDoubleClicked.connect(self._on_client_double_click)
+        
         # Orders context menu - static actions only
         self.orders_grid.add_context_action("edit", "Modifier devis")
         self.orders_grid.add_context_action("print", "Imprimer devis")
@@ -333,14 +353,14 @@ class MainWindow(QMainWindow):
         # Logic for "Transformer en commande de matière première"
         can_create_order = False
         if num_selected == 1:
-            status = row_data[6] if len(row_data) > 6 else ""  # Column 6 is "Statut"
+            status = row_data[5] if len(row_data) > 5 else ""  # Column 5 is "Statut" (after removing Contact column)
             if status == "Devis Final":
                 can_create_order = True
         elif num_selected > 1:
             # Check if all selected are Final Devis
             all_final = True
             for r_idx in selected_rows:
-                status = self.orders_grid.get_row_data(r_idx)[6]  # Column 6 is "Statut"
+                status = self.orders_grid.get_row_data(r_idx)[5]  # Column 5 is "Statut" (after removing Contact column)
                 if status != "Devis Final":
                     all_final = False
                     break
@@ -633,6 +653,238 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création: {str(e)}')
             finally:
                 session.close()
+
+    def _on_supplier_double_click(self, row: int):
+        """Handle double-click on supplier row to show detailed view"""
+        if not self.suppliers_grid or not self.suppliers_grid.table:
+            return
+            
+        # Get row data directly from table
+        row_data = []
+        for col in range(self.suppliers_grid.table.columnCount()):
+            item = self.suppliers_grid.table.item(row, col)
+            if item:
+                row_data.append(item.text())
+            else:
+                row_data.append('')
+                
+        if not row_data or len(row_data) < 1:
+            return
+            
+        # Extract supplier ID
+        supplier_id_str = row_data[0]
+        if not supplier_id_str:
+            return
+            
+        try:
+            supplier_id = int(supplier_id_str)
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, 'Erreur', 'ID de fournisseur invalide')
+            return
+        
+        # Get supplier from database and show detail dialog
+        session = SessionLocal()
+        try:
+            supplier = session.get(Supplier, supplier_id)
+            if not supplier:
+                QMessageBox.warning(self, 'Erreur', 'Fournisseur introuvable')
+                return
+                
+            # Show detail dialog in read-only mode
+            detail_dialog = SupplierDetailDialog(supplier, self, read_only=True)
+            detail_dialog.exec()
+                
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'affichage des détails: {str(e)}')
+        finally:
+            session.close()
+
+    def _on_client_double_click(self, row: int):
+        """Handle double-click on client row to show detailed view"""
+        if not self.clients_grid or not self.clients_grid.table:
+            return
+            
+        # Get row data directly from table
+        row_data = []
+        for col in range(self.clients_grid.table.columnCount()):
+            item = self.clients_grid.table.item(row, col)
+            if item:
+                row_data.append(item.text())
+            else:
+                row_data.append('')
+                
+        if not row_data or len(row_data) < 1:
+            return
+            
+        # Extract client ID
+        client_id_str = row_data[0]
+        if not client_id_str:
+            return
+            
+        try:
+            client_id = int(client_id_str)
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, 'Erreur', 'ID de client invalide')
+            return
+        
+        # Get client from database and show detail dialog
+        session = SessionLocal()
+        try:
+            client = session.get(Client, client_id)
+            if not client:
+                QMessageBox.warning(self, 'Erreur', 'Client introuvable')
+                return
+                
+            # Show detail dialog in read-only mode
+            detail_dialog = ClientDetailDialog(client, self, read_only=True)
+            detail_dialog.exec()
+                
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'affichage des détails: {str(e)}')
+        finally:
+            session.close()
+
+    def _handle_suppliers_context_menu(self, action_name: str, row: int, row_data: list):
+        """Handle context menu actions for suppliers grid"""
+        if not row_data or len(row_data) < 1:
+            return
+            
+        # Extract supplier ID
+        supplier_id_str = row_data[0]
+        if not supplier_id_str:
+            return
+            
+        try:
+            supplier_id = int(supplier_id_str)
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, 'Erreur', 'ID de fournisseur invalide')
+            return
+
+        session = SessionLocal()
+        try:
+            supplier = session.get(Supplier, supplier_id)
+            if not supplier:
+                QMessageBox.warning(self, 'Erreur', 'Fournisseur introuvable')
+                return
+
+            if action_name == "edit":
+                # Show edit dialog
+                detail_dialog = SupplierDetailDialog(supplier, self, read_only=False)
+                if detail_dialog.exec():
+                    # Update supplier with new data
+                    data = detail_dialog.get_data()
+                    for key, value in data.items():
+                        setattr(supplier, key, value)
+                    
+                    session.commit()
+                    QMessageBox.information(self, 'Succès', f'Fournisseur {data["name"]} modifié')
+                    self.dashboard.add_activity("F", f"Fournisseur modifié: {data['name']}", "#FFA500")
+                    self.refresh_all()
+                    
+            elif action_name == "delete":
+                # Confirm deletion
+                result = QMessageBox.question(
+                    self, 
+                    'Confirmation', 
+                    f'Êtes-vous sûr de vouloir supprimer le fournisseur "{supplier.name}" ?\n\n'
+                    'Cette action est irréversible.',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                
+                if result == QMessageBox.StandardButton.Yes:
+                    # Check if supplier has orders
+                    if supplier.supplier_orders:
+                        QMessageBox.warning(
+                            self, 
+                            'Impossible de supprimer', 
+                            f'Le fournisseur "{supplier.name}" a des commandes associées.\n'
+                            'Supprimez d\'abord toutes les commandes de ce fournisseur.'
+                        )
+                        return
+                    
+                    session.delete(supplier)
+                    session.commit()
+                    QMessageBox.information(self, 'Succès', f'Fournisseur "{supplier.name}" supprimé')
+                    self.dashboard.add_activity("F", f"Fournisseur supprimé: {supplier.name}", "#DC3545")
+                    self.refresh_all()
+                    
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'opération: {str(e)}')
+        finally:
+            session.close()
+
+    def _handle_clients_context_menu(self, action_name: str, row: int, row_data: list):
+        """Handle context menu actions for clients grid"""
+        if not row_data or len(row_data) < 1:
+            return
+            
+        # Extract client ID
+        client_id_str = row_data[0]
+        if not client_id_str:
+            return
+            
+        try:
+            client_id = int(client_id_str)
+        except (ValueError, TypeError):
+            QMessageBox.warning(self, 'Erreur', 'ID de client invalide')
+            return
+
+        session = SessionLocal()
+        try:
+            client = session.get(Client, client_id)
+            if not client:
+                QMessageBox.warning(self, 'Erreur', 'Client introuvable')
+                return
+
+            if action_name == "edit":
+                # Show edit dialog
+                detail_dialog = ClientDetailDialog(client, self, read_only=False)
+                if detail_dialog.exec():
+                    # Update client with new data
+                    data = detail_dialog.get_data()
+                    for key, value in data.items():
+                        setattr(client, key, value)
+                    
+                    session.commit()
+                    QMessageBox.information(self, 'Succès', f'Client {data["name"]} modifié')
+                    self.dashboard.add_activity("C", f"Client modifié: {data['name']}", "#FFA500")
+                    self.refresh_all()
+                    
+            elif action_name == "delete":
+                # Confirm deletion
+                result = QMessageBox.question(
+                    self, 
+                    'Confirmation', 
+                    f'Êtes-vous sûr de vouloir supprimer le client "{client.name}" ?\n\n'
+                    'Cette action est irréversible.',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                
+                if result == QMessageBox.StandardButton.Yes:
+                    # Check if client has orders or quotations
+                    if client.orders or client.quotations:
+                        QMessageBox.warning(
+                            self, 
+                            'Impossible de supprimer', 
+                            f'Le client "{client.name}" a des commandes ou devis associés.\n'
+                            'Supprimez d\'abord toutes les commandes et devis de ce client.'
+                        )
+                        return
+                    
+                    session.delete(client)
+                    session.commit()
+                    QMessageBox.information(self, 'Succès', f'Client "{client.name}" supprimé')
+                    self.dashboard.add_activity("C", f"Client supprimé: {client.name}", "#DC3545")
+                    self.refresh_all()
+                    
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'opération: {str(e)}')
+        finally:
+            session.close()
 
     def _new_supplier_order(self) -> None:
         """Open dialog to create a new supplier order."""
@@ -1290,7 +1542,6 @@ class MainWindow(QMainWindow):
                 [
                     str(s.id),
                     s.name or "",
-                    getattr(s, 'contact_person', '') or "",
                     s.phone or "",
                     s.email or "",
                     s.address or "",
@@ -1305,7 +1556,6 @@ class MainWindow(QMainWindow):
                 [
                     str(c.id),
                     c.name or "",
-                    getattr(c, 'contact_person', '') or "",
                     c.phone or "",
                     c.email or "",
                     c.address or "",
@@ -1371,17 +1621,6 @@ class MainWindow(QMainWindow):
                 # Determine status based on type
                 status = "Devis Initial" if q.is_initial else "Devis Final"
                 
-                # Client contact information
-                client_contact = ""
-                if q.client.contact_name:
-                    client_contact = q.client.contact_name
-                elif q.client.phone:
-                    client_contact = q.client.phone
-                elif q.client.email:
-                    client_contact = q.client.email
-                else:
-                    client_contact = "N/A"
-                
                 # Format dates
                 issue_date_str = str(q.issue_date) if q.issue_date else "N/A"
                 valid_until_str = str(q.valid_until) if q.valid_until else "N/A"
@@ -1390,7 +1629,6 @@ class MainWindow(QMainWindow):
                     str(q.id),
                     str(q.reference or ""),
                     str(q.client.name if q.client else "N/A"),
-                    str(client_contact),
                     str(issue_date_str),
                     str(valid_until_str),
                     str(status),

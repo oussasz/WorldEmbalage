@@ -534,11 +534,11 @@ class PDFFormFiller:
                     caracteristique = item.get('grammage', '') or item.get('cardboard_type', '') or "Standard"
                     
                     # Get reference de matière première (same as chosen in devis)
-                    reference_plaque = item.get('material_reference', '') or item.get('reference', '') or ""
+                    ref_matiere = item.get('material_reference', '') or item.get('reference', '') or ""
                     
                     table_data.append([
                         str(idx),
-                        reference_plaque,
+                        ref_matiere,
                         mesure_caisse,
                         designation_plaque,
                         caracteristique,
@@ -579,7 +579,7 @@ class PDFFormFiller:
                 table.drawOn(c, x_position, y_position)
 
             # Add signature section in the right corner
-            c.setFont("Helvetica", 10)
+            c.setFont("Helvetica-Bold", 10)  # Set to bold for "Signateur"
             signature_x = width - 200  # Right side positioning
             signature_y = 150  # Bottom area
             
@@ -587,7 +587,10 @@ class PDFFormFiller:
             from datetime import date
             current_date = date.today().strftime('%d/%m/%Y')
             
-            c.drawString(signature_x, signature_y, "Signateur")
+            c.drawString(signature_x, signature_y, "Signateur :")
+            
+            # Switch back to normal font for the date line
+            c.setFont("Helvetica", 8)
             c.drawString(signature_x, signature_y - 20, f"Fait le {current_date} à ")
             
             # Add a line for signature
@@ -595,7 +598,6 @@ class PDFFormFiller:
 
             c.showPage()
             c.save()
-            
         except Exception as e:
             raise PDFFillError(f"Failed to create supplier order overlay: {str(e)}")
         finally:
