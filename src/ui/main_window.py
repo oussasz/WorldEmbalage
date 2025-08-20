@@ -27,6 +27,7 @@ from ui.dialogs.quotation_detail_dialog import QuotationDetailDialog
 from ui.widgets.data_grid import DataGrid
 from ui.widgets.dashboard import Dashboard
 from ui.widgets.split_view import SplitView
+from ui.widgets.quad_view import QuadView
 from ui.styles import IconManager
 from services.order_service import OrderService
 from services.pdf_form_filler import PDFFormFiller, PDFFillError
@@ -41,7 +42,7 @@ from models.orders import QuotationLineItem, ClientOrderLineItem
 class MainWindow(QMainWindow):
     def __init__(self):
         # Initialize UI component references
-        self.supplier_orders_split: SplitView
+        self.supplier_orders_quad: QuadView
         self.client_orders_grid: DataGrid
         self.orders_grid: DataGrid
         self.clients_suppliers_split: SplitView
@@ -260,18 +261,20 @@ class MainWindow(QMainWindow):
         )
         # Note: Grid created for backend compatibility but not displayed in UI
         
-        # 3. Commande de matière première (Split view: Initial Orders and Past Orders)
-        self.supplier_orders_split = SplitView(
+        # 3. Commande de matière première (Quad view: 4 status sections)
+        self.supplier_orders_quad = QuadView(
             "Commandes Initiales", ["ID", "Bon Commande", "Fournisseur", "Date", "Total UTTC", "Nb Articles", "Clients"],
-            "Commandes Passées", ["ID", "Bon Commande", "Fournisseur", "Statut", "Date", "Total UTTC", "Nb Articles", "Clients"]
+            "Commandes Passées", ["ID", "Bon Commande", "Fournisseur", "Statut", "Date", "Total UTTC", "Nb Articles", "Clients"],
+            "Partiellement Livrée", ["ID", "Bon Commande", "Fournisseur", "Statut", "Date", "Total UTTC", "Nb Articles", "Clients"],
+            "Terminée", ["ID", "Bon Commande", "Fournisseur", "Statut", "Date", "Total UTTC", "Nb Articles", "Clients"]
         )
-        self.supplier_orders_split.add_left_action_button("➕ Nouvelle", self._new_supplier_order)
+        self.supplier_orders_quad.add_top_left_action_button("➕ Nouvelle", self._new_supplier_order)
         
-        self.tab_widget.addTab(self.supplier_orders_split, IconManager.get_supplier_order_icon(), "Commande de matière première")
+        self.tab_widget.addTab(self.supplier_orders_quad, IconManager.get_supplier_order_icon(), "Commande de matière première")
         
         # 4. Stock (Split view: Raw materials and Finished products)
         self.stock_split = SplitView(
-            "Matières Premières", ["ID", "Type", "Référence", "Quantité", "Unité", "Fournisseur", "Date Réception"],
+            "Matières Premières", ["ID", "Type", "Référence", "Quantité", "Unité", "Fournisseur", "Bon Commande", "Client", "Date Réception"],
             "Produits Finis", ["ID", "Référence", "Description", "Quantité", "Statut", "Date Production"]
         )
         # Add Raw Material Arrival button to the left side (Raw materials)
@@ -316,28 +319,55 @@ class MainWindow(QMainWindow):
         self.orders_grid.contextMenuActionTriggered.connect(self._handle_orders_context_menu)
         self.orders_grid.contextMenuAboutToShow.connect(self._customize_orders_context_menu)
 
-        # Supplier orders context menu (both sides of split view)
-        # Left side (Initial Orders) - fewer actions since they're just starting
-        if hasattr(self.supplier_orders_split, 'left_grid') and self.supplier_orders_split.left_grid:
-            self.supplier_orders_split.left_grid.add_context_action("edit", "Modifier commande")
-            self.supplier_orders_split.left_grid.add_context_action("delete", "Supprimer commande")
-            self.supplier_orders_split.left_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
-            self.supplier_orders_split.left_grid.add_context_action("status_ordered", "→ Passer commande")
+        # Supplier orders context menu (4 sections of quad view)
+        # Top Left (Initial Orders) - basic actions
+        if hasattr(self.supplier_orders_quad, 'top_left_grid') and self.supplier_orders_quad.top_left_grid:
+            self.supplier_orders_quad.top_left_grid.add_context_action("edit", "Modifier commande")
+            self.supplier_orders_quad.top_left_grid.add_context_action("delete", "Supprimer commande")
+            self.supplier_orders_quad.top_left_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
+            self.supplier_orders_quad.top_left_grid.add_context_action("status_ordered", "→ Passer commande")
             
-            self.supplier_orders_split.left_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
-            self.supplier_orders_split.left_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
+            self.supplier_orders_quad.top_left_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
+            self.supplier_orders_quad.top_left_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
         
-        # Right side (Past Orders) - all status change actions
-        if hasattr(self.supplier_orders_split, 'right_grid') and self.supplier_orders_split.right_grid:
-            self.supplier_orders_split.right_grid.add_context_action("edit", "Modifier commande")
-            self.supplier_orders_split.right_grid.add_context_action("delete", "Supprimer commande")
-            self.supplier_orders_split.right_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
-            self.supplier_orders_split.right_grid.add_context_action("status_initial", "→ Commande Initial")
-            self.supplier_orders_split.right_grid.add_context_action("status_ordered", "→ Commande Passée")
-            self.supplier_orders_split.right_grid.add_context_action("status_received", "→ Commande Arrivée")
+        # Top Right (Ordered) - status change actions
+        if hasattr(self.supplier_orders_quad, 'top_right_grid') and self.supplier_orders_quad.top_right_grid:
+            self.supplier_orders_quad.top_right_grid.add_context_action("edit", "Modifier commande")
+            self.supplier_orders_quad.top_right_grid.add_context_action("delete", "Supprimer commande")
+            self.supplier_orders_quad.top_right_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
+            self.supplier_orders_quad.top_right_grid.add_context_action("status_initial", "→ Commande Initial")
+            self.supplier_orders_quad.top_right_grid.add_context_action("status_received", "→ Commande Arrivée")
+            self.supplier_orders_quad.top_right_grid.add_context_action("status_partial", "→ Partiellement Livré")
+            self.supplier_orders_quad.top_right_grid.add_context_action("status_completed", "→ Terminé")
             
-            self.supplier_orders_split.right_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
-            self.supplier_orders_split.right_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
+            self.supplier_orders_quad.top_right_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
+            self.supplier_orders_quad.top_right_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
+        
+        # Bottom Left (Partially Delivered) - status change actions
+        if hasattr(self.supplier_orders_quad, 'bottom_left_grid') and self.supplier_orders_quad.bottom_left_grid:
+            self.supplier_orders_quad.bottom_left_grid.add_context_action("edit", "Modifier commande")
+            self.supplier_orders_quad.bottom_left_grid.add_context_action("delete", "Supprimer commande")
+            self.supplier_orders_quad.bottom_left_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
+            self.supplier_orders_quad.bottom_left_grid.add_context_action("status_initial", "→ Commande Initial")
+            self.supplier_orders_quad.bottom_left_grid.add_context_action("status_ordered", "→ Commande Passée")
+            self.supplier_orders_quad.bottom_left_grid.add_context_action("status_received", "→ Commande Arrivée")
+            self.supplier_orders_quad.bottom_left_grid.add_context_action("status_completed", "→ Terminé")
+            
+            self.supplier_orders_quad.bottom_left_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
+            self.supplier_orders_quad.bottom_left_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
+        
+        # Bottom Right (Completed) - basic actions (less status changes needed)
+        if hasattr(self.supplier_orders_quad, 'bottom_right_grid') and self.supplier_orders_quad.bottom_right_grid:
+            self.supplier_orders_quad.bottom_right_grid.add_context_action("edit", "Modifier commande")
+            self.supplier_orders_quad.bottom_right_grid.add_context_action("delete", "Supprimer commande")
+            self.supplier_orders_quad.bottom_right_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
+            self.supplier_orders_quad.bottom_right_grid.add_context_action("status_initial", "→ Commande Initial")
+            self.supplier_orders_quad.bottom_right_grid.add_context_action("status_ordered", "→ Commande Passée")
+            self.supplier_orders_quad.bottom_right_grid.add_context_action("status_received", "→ Commande Arrivée")
+            self.supplier_orders_quad.bottom_right_grid.add_context_action("status_partial", "→ Partiellement Livré")
+            
+            self.supplier_orders_quad.bottom_right_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
+            self.supplier_orders_quad.bottom_right_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
 
     def _customize_orders_context_menu(self, row: int, row_data: list, menu):
         """Customize context menu based on quotation type and selection"""
@@ -1813,7 +1843,9 @@ class MainWindow(QMainWindow):
             status_display_map = {
                 'commande_initial': 'Commande Initial',
                 'commande_passee': 'Commande Passée', 
-                'commande_arrivee': 'Commande Arrivée'
+                'commande_arrivee': 'Commande Arrivée',
+                'partiellement_livre': 'Partiellement Livré',
+                'termine': 'Terminé'
             }
             
             supplier_orders_data = []
@@ -1869,47 +1901,97 @@ class MainWindow(QMainWindow):
                     supplier_order_colors.append("#E3F2FD")  # Light blue for ordered
                 elif status_value == "commande_arrivee":
                     supplier_order_colors.append("#E8F5E8")  # Light green for received
+                elif status_value == "partiellement_livre":
+                    supplier_order_colors.append("#FFF9C4")  # Light yellow for partially delivered
+                elif status_value == "termine":
+                    supplier_order_colors.append("#C8E6C9")  # Darker green for completed
                 else:
                     supplier_order_colors.append("#FFFFFF")  # White for unknown status
             
-            # Split data between initial orders and past orders
-            initial_orders_data = []
+            # Split data between the 4 status sections
+            initial_orders_data = []        # Top Left: "Commandes Initiales"
             initial_order_colors = []
-            past_orders_data = []
-            past_order_colors = []
+            ordered_data = []              # Top Right: "Commandes Passées" 
+            ordered_colors = []
+            partial_data = []              # Bottom Left: "Partiellement Livrée"
+            partial_colors = []
+            completed_data = []            # Bottom Right: "Terminée"
+            completed_colors = []
             
             for i, so_data in enumerate(supplier_orders_data):
                 status_col = so_data[3]  # Status column
+                
                 if status_col == "Commande Initial":
                     # Initial orders get simplified data (no status column)
                     initial_data = [so_data[0], so_data[1], so_data[2], so_data[4], so_data[5], so_data[6], so_data[7]]
                     initial_orders_data.append(initial_data)
                     initial_order_colors.append(supplier_order_colors[i])
+                elif status_col == "Commande Passée":
+                    # Ordered status goes to top right
+                    ordered_data.append(so_data)
+                    ordered_colors.append(supplier_order_colors[i])
+                elif status_col == "Partiellement Livré":
+                    # Partially delivered goes to bottom left
+                    partial_data.append(so_data)
+                    partial_colors.append(supplier_order_colors[i])
+                elif status_col == "Terminé":
+                    # Completed goes to bottom right
+                    completed_data.append(so_data)
+                    completed_colors.append(supplier_order_colors[i])
                 else:
-                    # Past orders keep all columns including status
-                    past_orders_data.append(so_data)
-                    past_order_colors.append(supplier_order_colors[i])
+                    # Default: other statuses go to ordered section
+                    ordered_data.append(so_data)
+                    ordered_colors.append(supplier_order_colors[i])
             
-            # Load data into split view
-            if self.supplier_orders_split.left_grid:
-                self.supplier_orders_split.left_grid.load_rows_with_colors(initial_orders_data, initial_order_colors)
-            if self.supplier_orders_split.right_grid:
-                self.supplier_orders_split.right_grid.load_rows_with_colors(past_orders_data, past_order_colors)
+            # Load data into quad view sections
+            if self.supplier_orders_quad.top_left_grid:
+                self.supplier_orders_quad.top_left_grid.load_rows_with_colors(initial_orders_data, initial_order_colors)
+            if self.supplier_orders_quad.top_right_grid:
+                self.supplier_orders_quad.top_right_grid.load_rows_with_colors(ordered_data, ordered_colors)
+            if self.supplier_orders_quad.bottom_left_grid:
+                self.supplier_orders_quad.bottom_left_grid.load_rows_with_colors(partial_data, partial_colors)
+            if self.supplier_orders_quad.bottom_right_grid:
+                self.supplier_orders_quad.bottom_right_grid.load_rows_with_colors(completed_data, completed_colors)
             
             # Refresh stock - Raw materials (receptions) on left side
             receptions = session.query(Reception).all()
-            receptions_data = [
-                [
+            receptions_data = []
+            
+            for r in receptions:
+                # Get supplier order information
+                bon_commande_ref = ""
+                clients_list = []
+                
+                if r.supplier_order:
+                    # Get the bon de commande reference
+                    bon_commande_ref = getattr(r.supplier_order, 'bon_commande_ref', 
+                                             getattr(r.supplier_order, 'reference', ''))
+                    
+                    # Get unique clients from line items
+                    if hasattr(r.supplier_order, 'line_items') and r.supplier_order.line_items:
+                        unique_clients = set()
+                        for item in r.supplier_order.line_items:
+                            if hasattr(item, 'client') and item.client:
+                                unique_clients.add(item.client.name)
+                        clients_list = sorted(unique_clients)
+                
+                # Format clients display
+                clients_display = ", ".join(clients_list) if clients_list else "N/A"
+                if len(clients_display) > 40:
+                    clients_display = clients_display[:37] + "..."
+                
+                receptions_data.append([
                     str(r.id),
                     getattr(r.supplier_order, 'notes', '') or "Matière première",  # Type
-                    getattr(r, 'reference', ''),  # Reference
-                    "N/A",  # Quantity (would need to be added to Reception model)
+                    getattr(r, 'reference', '') or f"REC-{r.id}",  # Reference
+                    str(getattr(r, 'quantity', 'N/A')),  # Quantity
                     "unité",  # Unit
                     r.supplier_order.supplier.name if r.supplier_order and r.supplier_order.supplier else "N/A",  # Supplier
+                    bon_commande_ref or "N/A",  # Bon Commande
+                    clients_display,  # Client(s)
                     getattr(r, 'reception_date', None) and getattr(r, 'reception_date').isoformat() or "",  # Date
-                ]
-                for r in receptions
-            ]
+                ])
+            
             self.stock_split.load_left_data(receptions_data)
             
             # Refresh stock - Finished products (production) on right side
@@ -2010,7 +2092,9 @@ class MainWindow(QMainWindow):
             status_map = {
                 "status_initial": "commande_initial",
                 "status_ordered": "commande_passee", 
-                "status_received": "commande_arrivee"
+                "status_received": "commande_arrivee",
+                "status_partial": "partiellement_livre",
+                "status_completed": "termine"
             }
             new_status = status_map.get(action_name)
             if new_status:
@@ -2101,7 +2185,9 @@ class MainWindow(QMainWindow):
             status_enum_map = {
                 'commande_initial': SupplierOrderStatus.INITIAL,
                 'commande_passee': SupplierOrderStatus.ORDERED,
-                'commande_arrivee': SupplierOrderStatus.RECEIVED
+                'commande_arrivee': SupplierOrderStatus.RECEIVED,
+                'partiellement_livre': SupplierOrderStatus.PARTIALLY_DELIVERED,
+                'termine': SupplierOrderStatus.COMPLETED
             }
             
             new_enum_status = status_enum_map.get(new_status)
@@ -2117,7 +2203,9 @@ class MainWindow(QMainWindow):
             status_display_map = {
                 'commande_initial': 'Commande Initial',
                 'commande_passee': 'Commande Passée', 
-                'commande_arrivee': 'Commande Arrivée'
+                'commande_arrivee': 'Commande Arrivée',
+                'partiellement_livre': 'Partiellement Livré',
+                'termine': 'Terminé'
             }
             
             display_status = status_display_map.get(new_status, new_status)

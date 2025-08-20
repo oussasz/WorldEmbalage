@@ -14,7 +14,15 @@ if TYPE_CHECKING:  # pragma: no cover
 class SupplierOrderStatus(str, enum.Enum):
     INITIAL = 'commande_initial'
     ORDERED = 'commande_passee'
-    RECEIVED = 'commande_arrivee'
+    PARTIALLY_DELIVERED = 'partiellement_livre'
+    COMPLETED = 'termine'
+    RECEIVED = 'commande_arrivee'  # Keep for backwards compatibility
+
+
+class DeliveryStatus(str, enum.Enum):
+    PENDING = 'pending'
+    PARTIAL = 'partial'
+    COMPLETE = 'complete'
 
 
 class ClientOrderStatus(str, enum.Enum):
@@ -22,11 +30,6 @@ class ClientOrderStatus(str, enum.Enum):
     IN_PRODUCTION = 'en_production'
     COMPLETE = 'terminé'
     CONFIRMED = 'confirmed'
-
-
-class DeliveryStatus(str, enum.Enum):
-    PARTIAL = 'partiel'
-    COMPLETE = 'complet'
 
 
 class BoxColor(str, enum.Enum):
@@ -85,9 +88,18 @@ class SupplierOrderLineItem(PKMixin, TimestampMixin, Base):
     cardboard_type: Mapped[str | None] = mapped_column(String(64))  # Caractéristiques (same as devis)
     material_reference: Mapped[str | None] = mapped_column(String(64))  # Référence de matière première (same as devis)
     notes: Mapped[str | None] = mapped_column(Text())
+    
+    # Delivery tracking
+    total_received_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    delivery_status: Mapped[DeliveryStatus] = mapped_column(
+        Enum(DeliveryStatus, native_enum=False), 
+        default=DeliveryStatus.PENDING, 
+        index=True
+    )
 
     supplier_order: Mapped['SupplierOrder'] = relationship(back_populates='line_items')
     client: Mapped['Client'] = relationship()  # type: ignore[name-defined]
+    material_deliveries: Mapped[list['MaterialDelivery']] = relationship(back_populates='line_item', cascade='all, delete-orphan')
 
 
 class Reception(PKMixin, TimestampMixin, Base):
@@ -110,6 +122,22 @@ class Return(PKMixin, TimestampMixin, Base):
     reason: Mapped[str | None] = mapped_column(Text())
 
     supplier_order: Mapped['SupplierOrder'] = relationship(back_populates='returns')
+
+
+class MaterialDelivery(PKMixin, TimestampMixin, Base):
+    __tablename__ = 'material_deliveries'
+
+    supplier_order_line_item_id: Mapped[int] = mapped_column(
+        ForeignKey('supplier_order_line_items.id', ondelete='CASCADE'), 
+        nullable=False, 
+        index=True
+    )
+    delivery_date: Mapped[Date] = mapped_column(Date, server_default=func.current_date(), index=True)
+    received_quantity: Mapped[int] = mapped_column(Integer, nullable=False)
+    batch_reference: Mapped[str | None] = mapped_column(String(64))
+    quality_notes: Mapped[str | None] = mapped_column(Text())
+
+    line_item: Mapped['SupplierOrderLineItem'] = relationship(back_populates='material_deliveries')
 
 
 class Quotation(PKMixin, TimestampMixin, Base):
@@ -259,7 +287,7 @@ class StockMovement(PKMixin, TimestampMixin, Base):
     plaque: Mapped['Plaque'] = relationship(back_populates='stock_movements')  # type: ignore[name-defined]
 
 __all__ = [
-    'SupplierOrder', 'SupplierOrderLineItem', 'Reception', 'Return', 'Quotation', 'QuotationLineItem', 
+    'SupplierOrder', 'SupplierOrderLineItem', 'Reception', 'Return', 'MaterialDelivery', 'Quotation', 'QuotationLineItem', 
     'ClientOrder', 'ClientOrderLineItem', 'Delivery', 'Invoice', 'StockMovement', 'SupplierOrderStatus', 
     'ClientOrderStatus', 'DeliveryStatus', 'StockMovementType', 'BoxColor'
 ]

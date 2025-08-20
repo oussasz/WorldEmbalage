@@ -7,7 +7,8 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from config.database import SessionLocal
-from models.orders import Reception, Quotation, SupplierOrder, SupplierOrderLineItem, SupplierOrderStatus
+from models.orders import Reception, Quotation, SupplierOrder, SupplierOrderLineItem, MaterialDelivery, DeliveryStatus, SupplierOrderStatus
+from services.delivery_tracking_service import DeliveryTrackingService
 from models.suppliers import Supplier
 from models.plaques import Plaque
 from typing import List, Dict, Any
@@ -307,25 +308,144 @@ class RawMaterialArrivalDialog(QDialog):
         ))
 
     def _save_arrival(self):
-        """Save the raw material arrival"""
+        """Save the raw material arrival with partial delivery tracking"""
         if not self.material_entries:
             QMessageBox.warning(self, "Attention", "Veuillez ajouter au moins une entrée de matière première.")
             return
         
         try:
-            # Here you would implement the logic to save the raw material arrival
-            # This could involve creating Reception records or updating stock
-            
             session = SessionLocal()
             try:
-                # For now, we'll just show a success message
-                # In a real implementation, you would:
-                # 1. Create Reception records for each material entry
-                # 2. Update stock quantities
-                # 3. Update supplier order status if applicable
+                saved_deliveries = []
+                updated_line_items = []
+                supplier_orders_used = set()  # Track which supplier orders we used - initialize at method level
+                
+                # Process each material entry
+                for entry in self.material_entries:
+                    # Find matching supplier order line items
+                    matching_line_items = session.query(SupplierOrderLineItem).filter(
+                        SupplierOrderLineItem.plaque_width_mm == entry['width'],
+                        SupplierOrderLineItem.plaque_length_mm == entry['height'],
+                        SupplierOrderLineItem.plaque_flap_mm == entry['rabat']
+                    ).all()
+                    
+                    if matching_line_items:
+                        # If there are matches, distribute the received quantity
+                        remaining_quantity = entry['quantity']
+                        
+                        for line_item in matching_line_items:
+                            if remaining_quantity <= 0:
+                                break
+                                
+                            # Calculate how much we can apply to this line item
+                            needed_quantity = line_item.quantity - (line_item.total_received_quantity or 0)
+                            if needed_quantity <= 0:
+                                continue  # This line item is already complete
+                                
+                            applied_quantity = min(remaining_quantity, needed_quantity)
+                            
+                            # Track supplier order for Reception creation
+                            supplier_orders_used.add(line_item.supplier_order_id)
+                            
+                            # Create delivery record
+                            try:
+                                delivery = MaterialDelivery(
+                                    supplier_order_line_item_id=line_item.id,
+                                    received_quantity=applied_quantity,
+                                    batch_reference=f"ARR-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
+                                    quality_notes=""
+                                )
+                                session.add(delivery)
+                                saved_deliveries.append(delivery)
+                                
+                                # Update line item totals
+                                line_item.total_received_quantity = (line_item.total_received_quantity or 0) + applied_quantity
+                                
+                                # Update delivery status
+                                if line_item.total_received_quantity >= line_item.quantity:
+                                    line_item.delivery_status = DeliveryStatus.COMPLETE
+                                else:
+                                    line_item.delivery_status = DeliveryStatus.PARTIAL
+                                    
+                                updated_line_items.append(line_item)
+                                remaining_quantity -= applied_quantity
+                                
+                            except Exception as delivery_error:
+                                # If MaterialDelivery table doesn't exist yet, skip delivery tracking
+                                print(f"Delivery tracking not available: {delivery_error}")
+                                # Just update the line item quantities directly
+                                line_item.total_received_quantity = (line_item.total_received_quantity or 0) + applied_quantity
+                                if hasattr(line_item, 'delivery_status'):
+                                    if line_item.total_received_quantity >= line_item.quantity:
+                                        line_item.delivery_status = DeliveryStatus.COMPLETE
+                                    else:
+                                        line_item.delivery_status = DeliveryStatus.PARTIAL
+                                updated_line_items.append(line_item)
+                                remaining_quantity -= applied_quantity
+                        
+                        # Update supplier order statuses to "Partially Delivered" for affected orders
+                        for supplier_order_id in supplier_orders_used:
+                            supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == supplier_order_id).first()
+                            if supplier_order:
+                                # Check if all line items are complete or if any are partial
+                                all_complete = True
+                                any_partial = False
+                                
+                                for line_item in supplier_order.line_items:
+                                    if hasattr(line_item, 'delivery_status'):
+                                        if line_item.delivery_status == DeliveryStatus.PARTIAL:
+                                            any_partial = True
+                                            all_complete = False
+                                        elif line_item.delivery_status != DeliveryStatus.COMPLETE:
+                                            all_complete = False
+                                    else:
+                                        # If no delivery status, check quantities
+                                        received_qty = line_item.total_received_quantity or 0
+                                        if received_qty < line_item.quantity:
+                                            if received_qty > 0:
+                                                any_partial = True
+                                            all_complete = False
+                                
+                                # Update supplier order status based on line item completion
+                                if all_complete:
+                                    supplier_order.status = SupplierOrderStatus.COMPLETED
+                                elif any_partial or any(getattr(li, 'total_received_quantity', 0) > 0 for li in supplier_order.line_items):
+                                    supplier_order.status = SupplierOrderStatus.PARTIALLY_DELIVERED
+                                
+                                print(f"Updated supplier order {supplier_order_id} status to: {supplier_order.status.value}")
+                        
+                        # Create Reception records for each supplier order that was used
+                        for supplier_order_id in supplier_orders_used:
+                            reception = Reception(
+                                supplier_order_id=supplier_order_id,
+                                quantity=entry['quantity'],
+                                notes=f"Arrivée matière: {entry['width']}x{entry['height']}x{entry['rabat']}mm"
+                            )
+                            session.add(reception)
+                    
+                    else:
+                        # No matching orders - this was already confirmed by user
+                        # Create a general reception record
+                        reception = Reception(
+                            supplier_order_id=1,  # Default/dummy supplier order
+                            quantity=entry['quantity'],
+                            notes=f"Plaque non-commandée: {entry['width']}x{entry['height']}x{entry['rabat']}mm"
+                        )
+                        session.add(reception)
+                
+                session.commit()
                 
                 total_entries = len(self.material_entries)
                 total_quantity = sum(entry['quantity'] for entry in self.material_entries)
+                
+                # Prepare status update information
+                status_info = ""
+                if supplier_orders_used:
+                    status_info = f"\nCommandes mises à jour: {len(supplier_orders_used)}"
+                    for supplier_order_id in supplier_orders_used:
+                        supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == supplier_order_id).first()
+                        if supplier_order:
+                            status_info += f"\n  - Commande {getattr(supplier_order, 'bon_commande_ref', supplier_order_id)}: {supplier_order.status.value}"
                 
                 QMessageBox.information(
                     self,
@@ -333,7 +453,9 @@ class RawMaterialArrivalDialog(QDialog):
                     f"Arrivée de matière première enregistrée avec succès!\n\n"
                     f"Entrées: {total_entries}\n"
                     f"Quantité totale: {total_quantity} plaques\n"
-                    f"Commandes associées: {len(self.related_supplier_orders)}"
+                    f"Livraisons partielles: {len(saved_deliveries)}\n"
+                    f"Articles mis à jour: {len(updated_line_items)}"
+                    f"{status_info}"
                 )
                 
                 self.accept()
