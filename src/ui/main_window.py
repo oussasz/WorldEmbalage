@@ -32,11 +32,21 @@ from services.order_service import OrderService
 from services.pdf_form_filler import PDFFormFiller, PDFFillError
 from services.pdf_export_service import export_supplier_order_to_pdf
 from typing import cast, Any
+from ui.widgets.split_view import SplitView
+from ui.widgets.data_grid import DataGrid
+from ui.widgets.dashboard import Dashboard
 from models.orders import QuotationLineItem, ClientOrderLineItem
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
+        # Initialize UI component references
+        self.supplier_orders_split: SplitView
+        self.client_orders_grid: DataGrid
+        self.orders_grid: DataGrid
+        self.clients_suppliers_split: SplitView
+        self.dashboard: Dashboard
+        
         super().__init__()
         self.setWindowTitle('World Embalage - Gestion Atelier Carton')
         self.setWindowIcon(IconManager.create_text_icon("WE", bg_color="#2C3E50"))
@@ -244,22 +254,28 @@ class MainWindow(QMainWindow):
         
         self.tab_widget.addTab(self.orders_grid, IconManager.get_quotation_icon(), "Devis")
         
-        # 3. Commande de matière première (renamed from Cmd. Fournisseurs)
-        self.supplier_orders_grid = DataGrid(
-            ["ID", "Bon Commande", "Fournisseur", "Statut", "Date", "Total UTTC", "Nb Articles", "Clients"]
+        # Keep client_orders_grid for backend logic but don't add to tabs
+        self.client_orders_grid = DataGrid(
+            ["ID", "Référence", "Client", "Statut", "Date Création", "Total HT (DA)", "Notes"]
         )
-        self.supplier_orders_grid.add_action_button("➕ Nouvelle", self._new_supplier_order)
+        # Note: Grid created for backend compatibility but not displayed in UI
         
-        # Connect double-click to show detail dialog
-        self.supplier_orders_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
+        # 3. Commande de matière première (Split view: Initial Orders and Past Orders)
+        self.supplier_orders_split = SplitView(
+            "Commandes Initiales", ["ID", "Bon Commande", "Fournisseur", "Date", "Total UTTC", "Nb Articles", "Clients"],
+            "Commandes Passées", ["ID", "Bon Commande", "Fournisseur", "Statut", "Date", "Total UTTC", "Nb Articles", "Clients"]
+        )
+        self.supplier_orders_split.add_left_action_button("➕ Nouvelle", self._new_supplier_order)
         
-        self.tab_widget.addTab(self.supplier_orders_grid, IconManager.get_supplier_order_icon(), "Commande de matière première")
+        self.tab_widget.addTab(self.supplier_orders_split, IconManager.get_supplier_order_icon(), "Commande de matière première")
         
         # 4. Stock (Split view: Raw materials and Finished products)
         self.stock_split = SplitView(
             "Matières Premières", ["ID", "Type", "Référence", "Quantité", "Unité", "Fournisseur", "Date Réception"],
             "Produits Finis", ["ID", "Référence", "Description", "Quantité", "Statut", "Date Production"]
         )
+        # Add Raw Material Arrival button to the left side (Raw materials)
+        self.stock_split.add_left_action_button("📦 Arrivée Matière Première", self._raw_material_arrival)
         # Note: We'll use receptions for raw materials and production for finished products
         self.tab_widget.addTab(self.stock_split, IconManager.get_reception_icon(), "Stock")
         
@@ -299,18 +315,29 @@ class MainWindow(QMainWindow):
         # Connect context menu signals
         self.orders_grid.contextMenuActionTriggered.connect(self._handle_orders_context_menu)
         self.orders_grid.contextMenuAboutToShow.connect(self._customize_orders_context_menu)
+
+        # Supplier orders context menu (both sides of split view)
+        # Left side (Initial Orders) - fewer actions since they're just starting
+        if hasattr(self.supplier_orders_split, 'left_grid') and self.supplier_orders_split.left_grid:
+            self.supplier_orders_split.left_grid.add_context_action("edit", "Modifier commande")
+            self.supplier_orders_split.left_grid.add_context_action("delete", "Supprimer commande")
+            self.supplier_orders_split.left_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
+            self.supplier_orders_split.left_grid.add_context_action("status_ordered", "→ Passer commande")
+            
+            self.supplier_orders_split.left_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
+            self.supplier_orders_split.left_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
         
-        # Supplier orders context menu
-        self.supplier_orders_grid.add_context_action("edit", "Modifier commande")
-        self.supplier_orders_grid.add_context_action("delete", "Supprimer commande")
-        self.supplier_orders_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
-        self.supplier_orders_grid.add_context_action("status_initial", "→ Commande Initial")
-        self.supplier_orders_grid.add_context_action("status_ordered", "→ Commande Passée")
-        self.supplier_orders_grid.add_context_action("status_received", "→ Commande Arrivée")
-        
-        # Connect supplier orders context menu signals
-        self.supplier_orders_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
-        self.supplier_orders_grid.contextMenuAboutToShow.connect(self._customize_supplier_orders_context_menu)
+        # Right side (Past Orders) - all status change actions
+        if hasattr(self.supplier_orders_split, 'right_grid') and self.supplier_orders_split.right_grid:
+            self.supplier_orders_split.right_grid.add_context_action("edit", "Modifier commande")
+            self.supplier_orders_split.right_grid.add_context_action("delete", "Supprimer commande")
+            self.supplier_orders_split.right_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
+            self.supplier_orders_split.right_grid.add_context_action("status_initial", "→ Commande Initial")
+            self.supplier_orders_split.right_grid.add_context_action("status_ordered", "→ Commande Passée")
+            self.supplier_orders_split.right_grid.add_context_action("status_received", "→ Commande Arrivée")
+            
+            self.supplier_orders_split.right_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
+            self.supplier_orders_split.right_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
 
     def _customize_orders_context_menu(self, row: int, row_data: list, menu):
         """Customize context menu based on quotation type and selection"""
@@ -864,15 +891,88 @@ class MainWindow(QMainWindow):
                 )
                 
                 if result == QMessageBox.StandardButton.Yes:
-                    # Check if client has orders or quotations
-                    if client.orders or client.quotations:
-                        QMessageBox.warning(
+                    # Check if client has orders or quotations with proper database queries
+                    from models.orders import ClientOrder, Quotation, SupplierOrderLineItem
+                    
+                    # Count actual orders and quotations in database
+                    orders_count = session.query(ClientOrder).filter(ClientOrder.client_id == client.id).count()
+                    quotations_count = session.query(Quotation).filter(Quotation.client_id == client.id).count()
+                    supplier_order_items_count = session.query(SupplierOrderLineItem).filter(SupplierOrderLineItem.client_id == client.id).count()
+                    
+                    if orders_count > 0 or quotations_count > 0 or supplier_order_items_count > 0:
+                        # Get details about all associated records
+                        details_msg = f'Le client "{client.name}" a des commandes ou devis associés.\n'
+                        details_msg += f'Trouvé: {orders_count} commande(s), {quotations_count} devis, et {supplier_order_items_count} bon de commande.\n\n'
+                        
+                        # Show details about client orders
+                        if orders_count > 0:
+                            client_orders = session.query(ClientOrder).filter(ClientOrder.client_id == client.id).all()
+                            details_msg += f"Commandes client concernées:\n"
+                            for co in client_orders:
+                                details_msg += f"- ID: {co.id}, Ref: {co.reference}, Statut: {co.status.value}\n"
+                            details_msg += "\n"
+                        
+                        # Show details about quotations
+                        if quotations_count > 0:
+                            quotations = session.query(Quotation).filter(Quotation.client_id == client.id).all()
+                            details_msg += f"Devis concernés:\n"
+                            for q in quotations:
+                                details_msg += f"- ID: {q.id}, Ref: {q.reference}\n"
+                            details_msg += "\n"
+                        
+                        if supplier_order_items_count > 0:
+                            # Get the supplier order references
+                            from models.orders import SupplierOrder
+                            supplier_orders_with_items = session.query(SupplierOrder).join(SupplierOrderLineItem).filter(
+                                SupplierOrderLineItem.client_id == client.id
+                            ).distinct().all()
+                            
+                            details_msg += f"Bons de commande concernés:\n"
+                            for so in supplier_orders_with_items:
+                                details_msg += f"- {so.bon_commande_ref}\n"
+                        
+                        details_msg += '\nVoulez-vous:'
+                        details_msg += '\n- Annuler pour garder le client'  
+                        details_msg += '\n- Retry pour supprimer TOUTES les commandes/devis ET le client (dangereux!)'
+                        
+                        result = QMessageBox.warning(
                             self, 
                             'Impossible de supprimer', 
-                            f'Le client "{client.name}" a des commandes ou devis associés.\n'
-                            'Supprimez d\'abord toutes les commandes et devis de ce client.'
+                            details_msg,
+                            QMessageBox.StandardButton.Cancel | QMessageBox.StandardButton.Retry,
+                            QMessageBox.StandardButton.Cancel
                         )
-                        return
+                        
+                        if result == QMessageBox.StandardButton.Retry:
+                            # Force delete - remove all associated records first
+                            try:
+                                # Delete client orders
+                                if orders_count > 0:
+                                    client_orders = session.query(ClientOrder).filter(ClientOrder.client_id == client.id).all()
+                                    for co in client_orders:
+                                        session.delete(co)
+                                
+                                # Delete quotations
+                                if quotations_count > 0:
+                                    quotations = session.query(Quotation).filter(Quotation.client_id == client.id).all()
+                                    for q in quotations:
+                                        session.delete(q)
+                                
+                                # Delete supplier order line items
+                                if supplier_order_items_count > 0:
+                                    supplier_line_items = session.query(SupplierOrderLineItem).filter(SupplierOrderLineItem.client_id == client.id).all()
+                                    for soli in supplier_line_items:
+                                        session.delete(soli)
+                                
+                                session.commit()
+                                QMessageBox.information(self, 'Nettoyage terminé', f'Toutes les commandes/devis associés au client "{client.name}" ont été supprimés.')
+                                
+                            except Exception as e:
+                                session.rollback()
+                                QMessageBox.critical(self, 'Erreur', f'Erreur lors du nettoyage: {str(e)}')
+                                return
+                        else:
+                            return
                     
                     session.delete(client)
                     session.commit()
@@ -1648,6 +1748,64 @@ class MainWindow(QMainWindow):
                 
             self.orders_grid.load_rows_with_colors(orders_data, row_colors)
             
+            # Refresh client orders
+            client_orders = session.query(ClientOrder).join(ClientOrder.client).all()
+            client_orders_data = []
+            client_order_colors = []
+            
+            # Map internal status values to display labels
+            client_status_display_map = {
+                'en_préparation': 'En Préparation',
+                'en_production': 'En Production', 
+                'terminé': 'Terminé',
+                'confirmed': 'Confirmé'
+            }
+            
+            for co in client_orders:
+                # Skip client orders without valid client relationships
+                if not co.client:
+                    continue
+                    
+                # Format date
+                creation_date_str = ""
+                if co.created_at:
+                    try:
+                        import datetime
+                        if isinstance(co.created_at, datetime.datetime):
+                            creation_date_str = co.created_at.strftime("%d/%m/%Y")
+                        else:
+                            creation_date_str = str(co.created_at)
+                    except (AttributeError, TypeError):
+                        creation_date_str = str(co.created_at)
+                
+                # Format total amount
+                total_amount_str = f"{co.total_amount:,.2f}" if hasattr(co, 'total_amount') and co.total_amount else "0.00"
+                
+                client_orders_data.append([
+                    str(co.id),
+                    str(co.reference or ""),
+                    str(co.client.name if co.client else "N/A"),
+                    client_status_display_map.get(co.status.value if co.status else "", "N/A"),
+                    creation_date_str,
+                    total_amount_str,
+                    str((co.notes[:25] + "..." if co.notes and len(co.notes) > 25 else co.notes) or "")
+                ])
+                
+                # Color coding based on status
+                status_value = co.status.value if co.status else "en_préparation"
+                if status_value == "en_préparation":
+                    client_order_colors.append("#FFF3E0")  # Light orange for preparation
+                elif status_value == "en_production":
+                    client_order_colors.append("#E3F2FD")  # Light blue for production
+                elif status_value == "terminé":
+                    client_order_colors.append("#E8F5E8")  # Light green for complete
+                elif status_value == "confirmed":
+                    client_order_colors.append("#F3E5F5")  # Light purple for confirmed
+                else:
+                    client_order_colors.append("#FFFFFF")  # White for unknown status
+            
+            self.client_orders_grid.load_rows_with_colors(client_orders_data, client_order_colors)
+            
             # Refresh supplier orders with comprehensive information
             supplier_orders = session.query(SupplierOrder).join(SupplierOrder.supplier).all()
             
@@ -1714,7 +1872,29 @@ class MainWindow(QMainWindow):
                 else:
                     supplier_order_colors.append("#FFFFFF")  # White for unknown status
             
-            self.supplier_orders_grid.load_rows_with_colors(supplier_orders_data, supplier_order_colors)
+            # Split data between initial orders and past orders
+            initial_orders_data = []
+            initial_order_colors = []
+            past_orders_data = []
+            past_order_colors = []
+            
+            for i, so_data in enumerate(supplier_orders_data):
+                status_col = so_data[3]  # Status column
+                if status_col == "Commande Initial":
+                    # Initial orders get simplified data (no status column)
+                    initial_data = [so_data[0], so_data[1], so_data[2], so_data[4], so_data[5], so_data[6], so_data[7]]
+                    initial_orders_data.append(initial_data)
+                    initial_order_colors.append(supplier_order_colors[i])
+                else:
+                    # Past orders keep all columns including status
+                    past_orders_data.append(so_data)
+                    past_order_colors.append(supplier_order_colors[i])
+            
+            # Load data into split view
+            if self.supplier_orders_split.left_grid:
+                self.supplier_orders_split.left_grid.load_rows_with_colors(initial_orders_data, initial_order_colors)
+            if self.supplier_orders_split.right_grid:
+                self.supplier_orders_split.right_grid.load_rows_with_colors(past_orders_data, past_order_colors)
             
             # Refresh stock - Raw materials (receptions) on left side
             receptions = session.query(Reception).all()
@@ -1759,13 +1939,17 @@ class MainWindow(QMainWindow):
 
     def _on_supplier_order_double_click(self, row: int):
         """Handle double-click on supplier order row to show detailed view"""
+        # Try to get data from either grid
+        sender = self.sender()
         row_data = []
-        for col in range(self.supplier_orders_grid.table.columnCount()):
-            item = self.supplier_orders_grid.table.item(row, col)
-            if item:
-                row_data.append(item.text())
-            else:
-                row_data.append('')
+        
+        # Use the get_row_data method if available
+        try:
+            if sender and hasattr(sender, 'get_row_data') and callable(getattr(sender, 'get_row_data', None)):
+                row_data = sender.get_row_data(row)  # type: ignore
+        except Exception as e:
+            print(f"Error getting row data: {e}")
+            return
         
         if not row_data or len(row_data) < 2:
             return
@@ -2007,5 +2191,112 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, 'Erreur', f'Erreur lors de la suppression: {str(e)}')
         finally:
             session.close()
+
+    def _new_client_order(self) -> None:
+        """Create a new client order."""
+        QMessageBox.information(self, 'Info', 'Création de nouvelle commande client - Fonctionnalité à implémenter')
+
+    def _handle_client_orders_context_menu(self, action_name: str, row: int, row_data: list):
+        """Handle client orders context menu actions"""
+        if action_name == "delete":
+            if len(row_data) > 1:
+                order_id = int(row_data[0])
+                reference = row_data[1]
+                self._delete_client_order_by_id(order_id, reference)
+        elif action_name == "edit":
+            QMessageBox.information(self, 'Info', 'Modification de commande client - Fonctionnalité à implémenter')
+        elif action_name.startswith("status_"):
+            if len(row_data) > 0:
+                order_id = int(row_data[0])
+                new_status = action_name.replace("status_", "")
+                self._update_client_order_status(order_id, new_status)
+
+    def _delete_client_order_by_id(self, order_id: int, reference: str):
+        """Delete a client order by ID"""
+        reply = QMessageBox.question(
+            self, 'Confirmation', 
+            f'Êtes-vous sûr de vouloir supprimer la commande client {reference} ?\n\nCette action est irréversible.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+            
+        session = SessionLocal()
+        try:
+            client_order = session.get(ClientOrder, order_id)
+            if client_order:
+                session.delete(client_order)
+                session.commit()
+                QMessageBox.information(self, 'Succès', f'Commande client {reference} supprimée avec succès')
+                self.refresh_all()
+            else:
+                QMessageBox.warning(self, 'Erreur', 'Commande introuvable')
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la suppression: {str(e)}')
+        finally:
+            session.close()
+
+    def _update_client_order_status(self, order_id: int, new_status: str):
+        """Update client order status"""
+        from models.orders import ClientOrderStatus
+        
+        status_map = {
+            'preparation': ClientOrderStatus.IN_PREPARATION,
+            'production': ClientOrderStatus.IN_PRODUCTION,
+            'complete': ClientOrderStatus.COMPLETE
+        }
+        
+        if new_status not in status_map:
+            QMessageBox.warning(self, 'Erreur', f'Statut invalide: {new_status}')
+            return
+            
+        session = SessionLocal()
+        try:
+            client_order = session.get(ClientOrder, order_id)
+            if client_order:
+                client_order.status = status_map[new_status]
+                session.commit()
+                QMessageBox.information(self, 'Succès', 'Statut mis à jour')
+                self.refresh_all()
+            else:
+                QMessageBox.warning(self, 'Erreur', 'Commande introuvable')
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la mise à jour: {str(e)}')
+        finally:
+            session.close()
+
+    def _on_client_order_double_click(self, row: int):
+        """Handle double-click on client order row"""
+        QMessageBox.information(self, 'Info', 'Détails de commande client - Fonctionnalité à implémenter')
+
+    def _raw_material_arrival(self):
+        """Open dialog for raw material arrival registration"""
+        try:
+            from ui.dialogs.raw_material_arrival_dialog import RawMaterialArrivalDialog
+            
+            dialog = RawMaterialArrivalDialog(self)
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                # Refresh the stock data after successful registration
+                self.refresh_all()
+                
+                # Log the activity in dashboard if available
+                if hasattr(self, 'dashboard') and self.dashboard:
+                    entries = dialog.get_material_entries()
+                    total_quantity = sum(entry['quantity'] for entry in entries)
+                    self.dashboard.add_activity(
+                        "Stock", 
+                        f"Arrivée matière première: {total_quantity} plaques", 
+                        "#28a745"
+                    )
+                    
+        except ImportError as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur d\'importation du dialogue: {str(e)}')
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'ouverture du dialogue: {str(e)}')
 
 __all__ = ['MainWindow']
