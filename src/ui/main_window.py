@@ -523,7 +523,7 @@ class MainWindow(QMainWindow):
             self._delete_quotation_by_id(order_id, reference)
         elif action_name == "create_supplier_order":
             # Check if this is a Final Devis before allowing supplier order creation
-            if len(row_data) > 6 and row_data[6] == "Devis Final":  # Column 6 is "Statut"
+            if len(row_data) > 5 and row_data[5] == "Devis Final":
                 self._create_supplier_order_for_quotation(order_id, reference)
             else:
                 QMessageBox.information(self, 'Information', 
@@ -1607,7 +1607,12 @@ class MainWindow(QMainWindow):
             
             # Check if this is based on an initial quotation
             if client_order.quotation and client_order.quotation.is_initial:
-                QMessageBox.warning(self, 'Attention', 'Impossible de créer une commande matières premières pour un devis initial. Veuillez d\'abord spécifier les quantités.')
+                QMessageBox.warning(
+                    self, 
+                    'Devis Initial', 
+                    'Les commandes de matières premières ne peuvent être créées que pour les Devis Finaux.\n\n'
+                    'Veuillez d\'abord finaliser le devis avant de créer une commande de matières premières.'
+                )
                 return
                 
             suppliers = session.query(Supplier).all()

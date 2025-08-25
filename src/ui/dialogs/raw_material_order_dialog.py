@@ -139,7 +139,7 @@ class RawMaterialOrderDialog(QDialog):
         
         self.save_btn = QPushButton('Créer Commande')
         self.save_btn.setDefault(True)
-        self.save_btn.clicked.connect(self.accept)
+        self.save_btn.clicked.connect(self._save_order)
         btn_layout.addWidget(self.save_btn)
         
         layout.addLayout(btn_layout)
@@ -148,6 +148,11 @@ class RawMaterialOrderDialog(QDialog):
         """Calculate material requirements based on client order quotation line items"""
         if not self.client_order.quotation or not self.client_order.quotation.line_items:
             self.calc_label.setText("⚠️ Aucune donnée de devis trouvée pour calculer les dimensions")
+            return
+        
+        # Check if quotation is final (not initial)
+        if getattr(self.client_order.quotation, 'is_initial', False):
+            self.calc_label.setText("⚠️ Les commandes de matières premières ne peuvent être créées que pour les Devis Finaux.\nVeuillez d'abord finaliser le devis.")
             return
         
         calculations = []
@@ -236,5 +241,37 @@ class RawMaterialOrderDialog(QDialog):
             'calculated_data': self._calculated_dimensions,
             'notes': self.notes_edit.toPlainText().strip()
         }
+    
+    def _save_order(self):
+        """Save the raw material order with validation for final quotations"""
+        # Validate that the quotation is final (not initial)
+        if not self.client_order.quotation:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Erreur", "Aucun devis associé à cette commande client.")
+            return
+        
+        if getattr(self.client_order.quotation, 'is_initial', False):
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, 
+                "Devis Initial", 
+                "Les commandes de matières premières ne peuvent être créées que pour les Devis Finaux.\n\n"
+                "Veuillez d'abord finaliser le devis avant de créer une commande de matières premières."
+            )
+            return
+        
+        # Validate form fields
+        if not self.ref_edit.text().strip():
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Erreur", "Veuillez saisir une référence de commande.")
+            return
+        
+        if self.supplier_combo.currentData() is None:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Erreur", "Veuillez sélectionner un fournisseur.")
+            return
+        
+        # If all validations pass, accept the dialog
+        self.accept()
 
 __all__ = ['RawMaterialOrderDialog']
