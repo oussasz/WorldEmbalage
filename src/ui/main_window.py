@@ -5,7 +5,7 @@ import os
 import subprocess
 from decimal import Decimal
 from pathlib import Path
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QLabel, QMenuBar, QMenu, QMessageBox, QTabWidget, QToolBar, QLineEdit, QStatusBar, QDialog
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenuBar, QMenu, QMessageBox, QTabWidget, QToolBar, QLineEdit, QStatusBar, QDialog, QPushButton
 from PyQt6.QtGui import QAction, QIcon
 from PyQt6.QtCore import Qt, QSize
 from config.database import SessionLocal
@@ -2512,9 +2512,233 @@ class MainWindow(QMainWindow):
             self._show_production_details(row_data)
 
     def _edit_reception(self, row_data: list):
-        """Edit a reception record"""
-        reception_id = int(row_data[0])
-        QMessageBox.information(self, 'Edit Reception', f'Editing reception ID: {reception_id}\nFunctionality to be implemented')
+        """Edit a reception record or manage merged receptions"""
+        reception_ids_str = row_data[0]
+        reception_ref = row_data[1]  # Reference column
+        
+        # Handle multiple IDs (comma-separated for merged entries)
+        reception_ids = [int(id_str.strip()) for id_str in reception_ids_str.split(',')]
+        
+        if len(reception_ids) == 1:
+            # Single reception - show simple quantity edit
+            reception_id = reception_ids[0]
+            self._show_single_reception_edit_dialog(reception_id)
+        else:
+            # Multiple receptions - show advanced management dialog
+            self._show_merged_reception_edit_dialog(reception_ids, reception_ref)
+
+    def _show_single_reception_edit_dialog(self, reception_id: int):
+        """Show dialog to edit quantity of a single reception"""
+        try:
+            session = SessionLocal()
+            try:
+                reception = session.get(Reception, reception_id)
+                if not reception:
+                    QMessageBox.warning(self, 'Erreur', 'Réception non trouvée')
+                    return
+                
+                # Create dialog
+                dialog = QDialog(self)
+                dialog.setWindowTitle(f'Modifier Réception REC-{reception.id}')
+                dialog.setMinimumWidth(400)
+                
+                layout = QVBoxLayout(dialog)
+                
+                # Info label
+                info_label = QLabel(f'Référence: REC-{reception.id}\n'
+                                  f'Date: {reception.reception_date}\n'
+                                  f'Notes: {reception.notes or "Aucune"}')
+                layout.addWidget(info_label)
+                
+                # Quantity input
+                qty_layout = QHBoxLayout()
+                qty_layout.addWidget(QLabel('Quantité:'))
+                qty_input = QLineEdit(str(reception.quantity))
+                qty_layout.addWidget(qty_input)
+                layout.addLayout(qty_layout)
+                
+                # Buttons
+                button_layout = QHBoxLayout()
+                save_btn = QPushButton('Sauvegarder')
+                cancel_btn = QPushButton('Annuler')
+                button_layout.addWidget(save_btn)
+                button_layout.addWidget(cancel_btn)
+                layout.addLayout(button_layout)
+                
+                # Connect buttons
+                save_btn.clicked.connect(lambda: self._save_single_reception_edit(
+                    dialog, reception_id, qty_input.text()))
+                cancel_btn.clicked.connect(dialog.reject)
+                
+                dialog.exec()
+            finally:
+                session.close()
+                
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'édition: {str(e)}')
+
+    def _save_single_reception_edit(self, dialog: QDialog, reception_id: int, new_quantity: str):
+        """Save changes to a single reception"""
+        try:
+            quantity = int(float(new_quantity.replace(',', '.')))
+            if quantity <= 0:
+                QMessageBox.warning(dialog, 'Erreur', 'La quantité doit être positive')
+                return
+                
+            session = SessionLocal()
+            try:
+                reception = session.get(Reception, reception_id)
+                if reception:
+                    reception.quantity = quantity
+                    session.commit()
+                    dialog.accept()
+                    self._load_stock_data()  # Refresh stock display
+                    QMessageBox.information(self, 'Succès', 'Quantité mise à jour avec succès')
+                else:
+                    QMessageBox.warning(dialog, 'Erreur', 'Réception non trouvée')
+            finally:
+                session.close()
+                    
+        except ValueError:
+            QMessageBox.warning(dialog, 'Erreur', 'Quantité invalide')
+        except Exception as e:
+            QMessageBox.critical(dialog, 'Erreur', f'Erreur lors de la sauvegarde: {str(e)}')
+
+    def _show_merged_reception_edit_dialog(self, reception_ids: list, reception_ref: str):
+        """Show dialog to manage merged receptions"""
+        try:
+            session = SessionLocal()
+            try:
+                receptions = session.query(Reception).filter(Reception.id.in_(reception_ids)).all()
+                
+                if not receptions:
+                    QMessageBox.warning(self, 'Erreur', 'Réceptions non trouvées')
+                    return
+                
+                # Create dialog
+                dialog = QDialog(self)
+                dialog.setWindowTitle(f'Gérer Réceptions Groupées ({reception_ref})')
+                dialog.setMinimumWidth(600)
+                dialog.setMinimumHeight(400)
+                
+                layout = QVBoxLayout(dialog)
+                
+                # Info label
+                info_label = QLabel(f'Réferences groupées: {reception_ref}\n'
+                                  f'Nombre de réceptions: {len(receptions)}')
+                layout.addWidget(info_label)
+                
+                # Table for individual receptions
+                from PyQt6.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
+                table = QTableWidget()
+                table.setColumnCount(4)
+                table.setHorizontalHeaderLabels(['Référence', 'Quantité', 'Date', 'Actions'])
+                table.setRowCount(len(receptions))
+                
+                # Populate table
+                for row, reception in enumerate(receptions):
+                    table.setItem(row, 0, QTableWidgetItem(f"REC-{reception.id}"))
+                    
+                    # Editable quantity
+                    qty_item = QTableWidgetItem(str(reception.quantity))
+                    table.setItem(row, 1, qty_item)
+                    
+                    table.setItem(row, 2, QTableWidgetItem(str(reception.reception_date)))
+                    
+                    # Delete button
+                    delete_btn = QPushButton('Supprimer')
+                    delete_btn.clicked.connect(lambda checked, r_id=reception.id: 
+                                             self._delete_individual_reception(r_id, dialog))
+                    table.setCellWidget(row, 3, delete_btn)
+                
+                # Auto-resize columns
+                header = table.horizontalHeader()
+                if header:
+                    header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+                    header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+                    header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+                    header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+                
+                layout.addWidget(table)
+                
+                # Buttons
+                button_layout = QHBoxLayout()
+                save_btn = QPushButton('Sauvegarder Quantités')
+                close_btn = QPushButton('Fermer')
+                button_layout.addWidget(save_btn)
+                button_layout.addWidget(close_btn)
+                layout.addLayout(button_layout)
+                
+                # Connect buttons
+                save_btn.clicked.connect(lambda: self._save_merged_reception_quantities(
+                    dialog, table, receptions))
+                close_btn.clicked.connect(dialog.accept)
+                
+                dialog.exec()
+            finally:
+                session.close()
+                
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'ouverture du dialogue: {str(e)}')
+
+    def _save_merged_reception_quantities(self, dialog: QDialog, table, receptions: list):
+        """Save quantity changes for merged receptions"""
+        try:
+            session = SessionLocal()
+            try:
+                for row, reception in enumerate(receptions):
+                    qty_item = table.item(row, 1)
+                    if qty_item:
+                        new_quantity = int(float(qty_item.text().replace(',', '.')))
+                        if new_quantity <= 0:
+                            QMessageBox.warning(dialog, 'Erreur', 
+                                              f'La quantité pour REC-{reception.id} doit être positive')
+                            return
+                        
+                        # Update reception
+                        db_reception = session.get(Reception, reception.id)
+                        if db_reception:
+                            db_reception.quantity = new_quantity
+                
+                session.commit()
+                self._load_stock_data()
+                QMessageBox.information(self, 'Succès', 'Quantités mises à jour avec succès')
+            finally:
+                session.close()
+                
+        except ValueError:
+            QMessageBox.warning(dialog, 'Erreur', 'Quantité invalide détectée')
+        except Exception as e:
+            QMessageBox.critical(dialog, 'Erreur', f'Erreur lors de la sauvegarde: {str(e)}')
+
+    def _delete_individual_reception(self, reception_id: int, parent_dialog: QDialog):
+        """Delete an individual reception from a merged group"""
+        try:
+            session = SessionLocal()
+            try:
+                reception = session.get(Reception, reception_id)
+                if not reception:
+                    QMessageBox.warning(parent_dialog, 'Erreur', 'Réception non trouvée')
+                    return
+                
+                reply = QMessageBox.question(
+                    parent_dialog,
+                    'Confirmer la suppression',
+                    f'Êtes-vous sûr de vouloir supprimer la réception "REC-{reception.id}"?',
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    session.delete(reception)
+                    session.commit()
+                    parent_dialog.accept()  # Close dialog to refresh
+                    self._load_stock_data()
+                    QMessageBox.information(self, 'Succès', 'Réception supprimée avec succès')
+            finally:
+                session.close()
+                    
+        except Exception as e:
+            QMessageBox.critical(parent_dialog, 'Erreur', f'Erreur lors de la suppression: {str(e)}')
 
     def _delete_reception(self, row_data: list):
         """Delete a reception record (or multiple merged records)"""
@@ -2669,5 +2893,13 @@ Détails individuels:"""
         """Show detailed information about a production"""
         production_id = int(row_data[0])
         QMessageBox.information(self, 'Info', f'Détails de production ID: {production_id} - Fonctionnalité à implémenter')
+
+    def _load_stock_data(self):
+        """Refresh the stock data display"""
+        try:
+            # Use the existing refresh method to reload all data including stock
+            self.refresh_all()
+        except Exception as e:
+            print(f"Error refreshing stock data: {e}")
 
 __all__ = ['MainWindow']
