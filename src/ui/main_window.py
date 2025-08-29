@@ -332,39 +332,24 @@ class MainWindow(QMainWindow):
         
         # Top Right (Ordered) - status change actions
         if hasattr(self.supplier_orders_quad, 'top_right_grid') and self.supplier_orders_quad.top_right_grid:
-            self.supplier_orders_quad.top_right_grid.add_context_action("edit", "Modifier commande")
             self.supplier_orders_quad.top_right_grid.add_context_action("delete", "Supprimer commande")
             self.supplier_orders_quad.top_right_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
-            self.supplier_orders_quad.top_right_grid.add_context_action("status_initial", "→ Commande Initial")
-            self.supplier_orders_quad.top_right_grid.add_context_action("status_received", "→ Commande Arrivée")
-            self.supplier_orders_quad.top_right_grid.add_context_action("status_partial", "→ Partiellement Livré")
-            self.supplier_orders_quad.top_right_grid.add_context_action("status_completed", "→ Terminé")
+            self.supplier_orders_quad.top_right_grid.add_context_action("status_initial", "→ Commande annulée")
             
             self.supplier_orders_quad.top_right_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
             self.supplier_orders_quad.top_right_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
         
         # Bottom Left (Partially Delivered) - status change actions
         if hasattr(self.supplier_orders_quad, 'bottom_left_grid') and self.supplier_orders_quad.bottom_left_grid:
-            self.supplier_orders_quad.bottom_left_grid.add_context_action("edit", "Modifier commande")
             self.supplier_orders_quad.bottom_left_grid.add_context_action("delete", "Supprimer commande")
-            self.supplier_orders_quad.bottom_left_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
-            self.supplier_orders_quad.bottom_left_grid.add_context_action("status_initial", "→ Commande Initial")
-            self.supplier_orders_quad.bottom_left_grid.add_context_action("status_ordered", "→ Commande Passée")
-            self.supplier_orders_quad.bottom_left_grid.add_context_action("status_received", "→ Commande Arrivée")
             self.supplier_orders_quad.bottom_left_grid.add_context_action("status_completed", "→ Terminé")
             
             self.supplier_orders_quad.bottom_left_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
             self.supplier_orders_quad.bottom_left_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
         
-        # Bottom Right (Completed) - basic actions (less status changes needed)
+        # Bottom Right (Completed) - status cannot be changed manually
         if hasattr(self.supplier_orders_quad, 'bottom_right_grid') and self.supplier_orders_quad.bottom_right_grid:
-            self.supplier_orders_quad.bottom_right_grid.add_context_action("edit", "Modifier commande")
             self.supplier_orders_quad.bottom_right_grid.add_context_action("delete", "Supprimer commande")
-            self.supplier_orders_quad.bottom_right_grid.add_context_action("export_pdf", "📄 Exporter en PDF")
-            self.supplier_orders_quad.bottom_right_grid.add_context_action("status_initial", "→ Commande Initial")
-            self.supplier_orders_quad.bottom_right_grid.add_context_action("status_ordered", "→ Commande Passée")
-            self.supplier_orders_quad.bottom_right_grid.add_context_action("status_received", "→ Commande Arrivée")
-            self.supplier_orders_quad.bottom_right_grid.add_context_action("status_partial", "→ Partiellement Livré")
             
             self.supplier_orders_quad.bottom_right_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
             self.supplier_orders_quad.bottom_right_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
