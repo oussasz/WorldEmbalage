@@ -301,7 +301,7 @@ class PDFFormFiller:
                 {"field": "client_address", "x": 60, "y": 230},
                 
 
- {"field": "devie_number", "x": 515, "y": 139},
+             {"field": "devie_number", "x": 515, "y": 139},
                 {"field": "devie_date", "x": 485, "y": 153}
             ]
 
@@ -507,22 +507,13 @@ class PDFFormFiller:
                 
                 table_data = [["N°", "R°", "Mesure", "Désignation", "Caractéristique", "Prix UTTC", "Quantité"]]
                 
-                total = Decimal('0')
-                
                 for idx, item in enumerate(data['order_items'], 1):
-                    # Calculate line total
-                    quantity = Decimal(str(item.get('estimated_quantity', 0)))
-                    unit_price = Decimal(str(item.get('unit_price', 0)))
-                    line_total = quantity * unit_price
-                    total += line_total
-                    
                     # Build mesure de caisse string (box dimensions)
                     mesure_caisse = ""
                     if item.get('length_mm') and item.get('width_mm') and item.get('height_mm'):
                         mesure_caisse = f"{item['length_mm']} / {item['width_mm']} / {item['height_mm']}"
                     
                     # Build designation de plaque string (plaque dimensions)
-                    # Note: These fields might need to be added to your data structure
                     designation_plaque = ""
                     if item.get('plaque_width_mm') and item.get('plaque_length_mm') and item.get('plaque_flap_mm'):
                         designation_plaque = f"{item['plaque_width_mm']} / {item['plaque_length_mm']} / {item['plaque_flap_mm']}"
@@ -536,6 +527,9 @@ class PDFFormFiller:
                     # Get reference de matière première (same as chosen in devis)
                     ref_matiere = item.get('material_reference', '') or item.get('reference', '') or ""
                     
+                    # Get unit price
+                    unit_price = Decimal(str(item.get('unit_price', 0)))
+                    
                     table_data.append([
                         str(idx),
                         ref_matiere,
@@ -546,11 +540,9 @@ class PDFFormFiller:
                         str(item.get('estimated_quantity', ''))
                     ])
 
-                # Add total row
-                table_data.append(["", "", "", "", "", "TOTAL:", f"{total:.2f} DA"])
-
-                # Create and style the table
-                table = Table(table_data, colWidths=[20, 60, 90, 90, 70, 60, 50])
+                # Create and style the table with improved column widths for better text display
+                # Adjusted column widths to better accommodate longer text
+                table = Table(table_data, colWidths=[25, 70, 100, 100, 80, 65, 55])
                 style = TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0D47A1")),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -560,13 +552,12 @@ class PDFFormFiller:
                     ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
                     ('FONTSIZE', (0, 0), (-1, -1), 8),
                     ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                    ('TOPPADDING', (0, 1), (-1, -1), 6),
-                    ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
-                    ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor("#BBDEFB")]),
-                    ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor("#E3F2FD")),  # Total row
-                    ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+                    ('TOPPADDING', (0, 1), (-1, -1), 8),  # Increased padding for better text display
+                    ('BOTTOMPADDING', (0, 1), (-1, -1), 8),  # Increased padding for better text display
+                    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor("#BBDEFB")]),
                     ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                    ('WORDWRAP', (0, 0), (-1, -1), True)
+                    ('WORDWRAP', (0, 0), (-1, -1), True),  # Enable word wrapping
+                    ('SPLITLONGWORDS', (0, 0), (-1, -1), True),  # Split long words if necessary
                 ])
 
                 table.setStyle(style)

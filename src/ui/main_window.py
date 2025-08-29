@@ -274,7 +274,7 @@ class MainWindow(QMainWindow):
         
         # 4. Stock (Split view: Raw materials and Finished products)
         self.stock_split = SplitView(
-            "Matières Premières", ["ID", "Type", "Référence", "Quantité", "Unité", "Fournisseur", "Bon Commande", "Client", "Date Réception"],
+            "Matières Premières", ["ID", "Référence", "Quantité", "Fournisseur", "Bon Commande", "Client", "Date Réception"],
             "Produits Finis", ["ID", "Référence", "Description", "Quantité", "Statut", "Date Production"]
         )
         # Add Raw Material Arrival button to the left side (Raw materials)
@@ -368,6 +368,24 @@ class MainWindow(QMainWindow):
             
             self.supplier_orders_quad.bottom_right_grid.contextMenuActionTriggered.connect(self._handle_supplier_orders_context_menu)
             self.supplier_orders_quad.bottom_right_grid.rowDoubleClicked.connect(self._on_supplier_order_double_click)
+
+        # Stock context menu (Raw materials)
+        if self.receptions_grid:
+            self.receptions_grid.add_context_action("edit", "✏️ Modifier réception")
+            self.receptions_grid.add_context_action("delete", "🗑️ Supprimer réception")
+            
+            # Connect stock context menu signals
+            self.receptions_grid.contextMenuActionTriggered.connect(self._handle_stock_context_menu)
+            self.receptions_grid.rowDoubleClicked.connect(self._on_stock_double_click)
+
+        # Production context menu (Finished products)
+        if self.production_grid:
+            self.production_grid.add_context_action("edit", "✏️ Modifier production")
+            self.production_grid.add_context_action("delete", "🗑️ Supprimer production")
+            
+            # Connect production context menu signals
+            self.production_grid.contextMenuActionTriggered.connect(self._handle_production_context_menu)
+            self.production_grid.rowDoubleClicked.connect(self._on_production_double_click)
 
     def _customize_orders_context_menu(self, row: int, row_data: list, menu):
         """Customize context menu based on quotation type and selection"""
@@ -1960,17 +1978,35 @@ class MainWindow(QMainWindow):
             
             # Refresh stock - Raw materials (receptions) on left side
             receptions = session.query(Reception).all()
-            receptions_data = []
+            
+            # Group receptions by dimensions (extracted from notes) and sum quantities
+            grouped_receptions = {}
+            reception_groups = {}  # To track which receptions belong to each group
             
             for r in receptions:
+                # Extract dimensions from notes (format: "Arrivée matière: 100x200x50mm")
+                dimensions_key = "unknown"
+                if r.notes and "Arrivée matière:" in r.notes:
+                    try:
+                        # Extract dimensions like "100x200x50mm"
+                        parts = r.notes.split(":")
+                        if len(parts) > 1:
+                            dim_part = parts[1].strip()
+                            if "mm" in dim_part:
+                                dimensions_key = dim_part  # e.g., "100x200x50mm"
+                    except:
+                        pass
+                
                 # Get supplier order information
                 bon_commande_ref = ""
                 clients_list = []
+                supplier_name = "N/A"
                 
                 if r.supplier_order:
                     # Get the bon de commande reference
                     bon_commande_ref = getattr(r.supplier_order, 'bon_commande_ref', 
                                              getattr(r.supplier_order, 'reference', ''))
+                    supplier_name = r.supplier_order.supplier.name if r.supplier_order.supplier else "N/A"
                     
                     # Get unique clients from line items
                     if hasattr(r.supplier_order, 'line_items') and r.supplier_order.line_items:
@@ -1985,16 +2021,66 @@ class MainWindow(QMainWindow):
                 if len(clients_display) > 40:
                     clients_display = clients_display[:37] + "..."
                 
+                # Create a group key based on dimensions and supplier
+                group_key = f"{dimensions_key}|{supplier_name}"
+                
+                if group_key not in grouped_receptions:
+                    # First reception for these dimensions
+                    grouped_receptions[group_key] = {
+                        'ids': [r.id],
+                        'reference': f"REC-{r.id}",
+                        'quantity': r.quantity,
+                        'supplier': supplier_name,
+                        'bon_commande': bon_commande_ref or "N/A",
+                        'clients': clients_display,
+                        'date': getattr(r, 'reception_date', None) and getattr(r, 'reception_date').isoformat() or "",
+                        'dimensions': dimensions_key
+                    }
+                else:
+                    # Merge with existing group
+                    group = grouped_receptions[group_key]
+                    group['ids'].append(r.id)
+                    group['quantity'] += r.quantity
+                    # Update reference to show it's merged
+                    if len(group['ids']) == 2:
+                        group['reference'] = f"REC-{min(group['ids'])}-{max(group['ids'])}"
+                    else:
+                        group['reference'] = f"REC-{min(group['ids'])}+{len(group['ids'])-1}"
+                    
+                    # Keep the most recent date
+                    current_date = getattr(r, 'reception_date', None) and getattr(r, 'reception_date').isoformat() or ""
+                    if current_date > group['date']:
+                        group['date'] = current_date
+                    
+                    # Merge bon commande references if different
+                    current_bon = bon_commande_ref or "N/A"
+                    if current_bon != group['bon_commande'] and current_bon != "N/A":
+                        if group['bon_commande'] == "N/A":
+                            group['bon_commande'] = current_bon
+                        else:
+                            group['bon_commande'] = f"{group['bon_commande']}, {current_bon}"
+                    
+                    # Merge clients if different
+                    if clients_display != group['clients'] and clients_display != "N/A":
+                        if group['clients'] == "N/A":
+                            group['clients'] = clients_display
+                        else:
+                            combined_clients = f"{group['clients']}, {clients_display}"
+                            if len(combined_clients) > 40:
+                                combined_clients = combined_clients[:37] + "..."
+                            group['clients'] = combined_clients
+            
+            # Convert grouped data to display format
+            receptions_data = []
+            for group_key, group in grouped_receptions.items():
                 receptions_data.append([
-                    str(r.id),
-                    getattr(r.supplier_order, 'notes', '') or "Matière première",  # Type
-                    getattr(r, 'reference', '') or f"REC-{r.id}",  # Reference
-                    str(getattr(r, 'quantity', 'N/A')),  # Quantity
-                    "unité",  # Unit
-                    r.supplier_order.supplier.name if r.supplier_order and r.supplier_order.supplier else "N/A",  # Supplier
-                    bon_commande_ref or "N/A",  # Bon Commande
-                    clients_display,  # Client(s)
-                    getattr(r, 'reception_date', None) and getattr(r, 'reception_date').isoformat() or "",  # Date
+                    ",".join(map(str, group['ids'])),  # Store all IDs for context menu
+                    group['reference'],  # Reference (merged)
+                    str(group['quantity']),  # Quantity (summed)
+                    group['supplier'],  # Supplier
+                    group['bon_commande'],  # Bon Commande (merged)
+                    group['clients'],  # Client(s) (merged)
+                    group['date'],  # Date (most recent)
                 ])
             
             self.stock_split.load_left_data(receptions_data)
@@ -2391,5 +2477,212 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, 'Erreur', f'Erreur d\'importation du dialogue: {str(e)}')
         except Exception as e:
             QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'ouverture du dialogue: {str(e)}')
+
+    def _handle_stock_context_menu(self, action_name: str, row: int, row_data: list):
+        """Handle context menu actions for stock items (raw materials)"""
+        if action_name == "edit":
+            self._edit_reception(row_data)
+        elif action_name == "delete":
+            self._delete_reception(row_data)
+
+    def _on_stock_double_click(self, row: int):
+        """Handle double-click on stock item (raw materials)"""
+        if not self.receptions_grid or not self.receptions_grid.table:
+            return
+            
+        # Get row data directly from table
+        row_data = []
+        for col in range(self.receptions_grid.table.columnCount()):
+            item = self.receptions_grid.table.item(row, col)
+            if item:
+                row_data.append(item.text())
+            else:
+                row_data.append('')
+                
+        if row_data:
+            self._show_reception_details(row_data)
+
+    def _handle_production_context_menu(self, action_name: str, row: int, row_data: list):
+        """Handle context menu actions for production items (finished products)"""
+        if action_name == "edit":
+            self._edit_production(row_data)
+        elif action_name == "delete":
+            self._delete_production(row_data)
+
+    def _on_production_double_click(self, row: int):
+        """Handle double-click on production item (finished products)"""
+        if not self.production_grid or not self.production_grid.table:
+            return
+            
+        # Get row data directly from table
+        row_data = []
+        for col in range(self.production_grid.table.columnCount()):
+            item = self.production_grid.table.item(row, col)
+            if item:
+                row_data.append(item.text())
+            else:
+                row_data.append('')
+                
+        if row_data:
+            self._show_production_details(row_data)
+
+    def _edit_reception(self, row_data: list):
+        """Edit a reception record"""
+        reception_id = int(row_data[0])
+        QMessageBox.information(self, 'Edit Reception', f'Editing reception ID: {reception_id}\nFunctionality to be implemented')
+
+    def _delete_reception(self, row_data: list):
+        """Delete a reception record (or multiple merged records)"""
+        reception_ids_str = row_data[0]
+        reception_ref = row_data[1]  # Reference column
+        
+        # Handle multiple IDs (comma-separated for merged entries)
+        reception_ids = [int(id_str.strip()) for id_str in reception_ids_str.split(',')]
+        
+        if len(reception_ids) == 1:
+            message = f'Êtes-vous sûr de vouloir supprimer la réception "{reception_ref}"?'
+        else:
+            message = f'Êtes-vous sûr de vouloir supprimer les {len(reception_ids)} réceptions groupées "{reception_ref}"?'
+        
+        reply = QMessageBox.question(
+            self, 
+            'Confirmer la suppression',
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            session = SessionLocal()
+            try:
+                deleted_count = 0
+                for reception_id in reception_ids:
+                    reception = session.get(Reception, reception_id)
+                    if reception:
+                        session.delete(reception)
+                        deleted_count += 1
+                
+                session.commit()
+                
+                if deleted_count > 0:
+                    if deleted_count == 1:
+                        QMessageBox.information(self, 'Succès', 'Réception supprimée avec succès')
+                    else:
+                        QMessageBox.information(self, 'Succès', f'{deleted_count} réceptions supprimées avec succès')
+                    self.refresh_all()
+                else:
+                    QMessageBox.warning(self, 'Erreur', 'Aucune réception trouvée')
+                    
+            except Exception as e:
+                session.rollback()
+                QMessageBox.critical(self, 'Erreur', f'Erreur lors de la suppression: {str(e)}')
+            finally:
+                session.close()
+
+    def _show_reception_details(self, row_data: list):
+        """Show detailed information about a reception (or multiple merged receptions)"""
+        reception_ids_str = row_data[0]
+        
+        # Handle multiple IDs (comma-separated for merged entries)
+        reception_ids = [int(id_str.strip()) for id_str in reception_ids_str.split(',')]
+        
+        session = SessionLocal()
+        try:
+            if len(reception_ids) == 1:
+                # Single reception
+                reception = session.get(Reception, reception_ids[0])
+                if reception:
+                    details = f"""Détails de la Réception
+                    
+ID: {reception.id}
+Référence: {getattr(reception, 'reference', '') or f"REC-{reception.id}"}
+Quantité: {reception.quantity}
+Date de réception: {reception.reception_date}
+Fournisseur: {reception.supplier_order.supplier.name if reception.supplier_order and reception.supplier_order.supplier else "N/A"}
+Bon de commande: {getattr(reception.supplier_order, 'bon_commande_ref', '') if reception.supplier_order else "N/A"}
+Notes: {reception.notes or "Aucune note"}"""
+                    
+                    QMessageBox.information(self, 'Détails de la Réception', details)
+                else:
+                    QMessageBox.warning(self, 'Erreur', 'Réception introuvable')
+            else:
+                # Multiple merged receptions
+                receptions = []
+                total_quantity = 0
+                dimensions = "N/A"
+                suppliers = set()
+                dates = []
+                
+                for reception_id in reception_ids:
+                    reception = session.get(Reception, reception_id)
+                    if reception:
+                        receptions.append(reception)
+                        total_quantity += reception.quantity
+                        dates.append(reception.reception_date)
+                        
+                        if reception.supplier_order and reception.supplier_order.supplier:
+                            suppliers.add(reception.supplier_order.supplier.name)
+                        
+                        # Extract dimensions from first reception's notes
+                        if dimensions == "N/A" and reception.notes and "Arrivée matière:" in reception.notes:
+                            try:
+                                parts = reception.notes.split(":")
+                                if len(parts) > 1:
+                                    dim_part = parts[1].strip()
+                                    if "mm" in dim_part:
+                                        dimensions = dim_part
+                            except:
+                                pass
+                
+                if receptions:
+                    details = f"""Détails des Réceptions Groupées
+
+Nombre de réceptions: {len(receptions)}
+IDs: {', '.join(map(str, reception_ids))}
+Dimensions: {dimensions}
+Quantité totale: {total_quantity}
+Fournisseur(s): {', '.join(suppliers) if suppliers else "N/A"}
+Dates: {min(dates)} à {max(dates)}
+
+Détails individuels:"""
+                    
+                    for i, reception in enumerate(receptions, 1):
+                        details += f"""
+  {i}. REC-{reception.id}: {reception.quantity} unités le {reception.reception_date}"""
+                    
+                    QMessageBox.information(self, 'Détails des Réceptions Groupées', details)
+                else:
+                    QMessageBox.warning(self, 'Erreur', 'Aucune réception trouvée')
+                    
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la récupération des détails: {str(e)}')
+        finally:
+            session.close()
+
+    def _edit_production(self, row_data: list):
+        """Edit a production record"""
+        production_id = int(row_data[0])
+        QMessageBox.information(self, 'Edit Production', f'Editing production ID: {production_id}\nFunctionality to be implemented')
+
+    def _delete_production(self, row_data: list):
+        """Delete a production record"""
+        production_id = int(row_data[0])
+        production_ref = row_data[1]  # Reference column
+        
+        reply = QMessageBox.question(
+            self, 
+            'Confirmer la suppression',
+            f'Êtes-vous sûr de vouloir supprimer la production "{production_ref}"?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            QMessageBox.information(self, 'Info', 'Suppression de production - Fonctionnalité à implémenter')
+
+    def _show_production_details(self, row_data: list):
+        """Show detailed information about a production"""
+        production_id = int(row_data[0])
+        QMessageBox.information(self, 'Info', f'Détails de production ID: {production_id} - Fonctionnalité à implémenter')
 
 __all__ = ['MainWindow']

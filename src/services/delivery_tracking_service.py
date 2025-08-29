@@ -33,7 +33,10 @@ class DeliveryTrackingService:
             SupplierOrderLineItem.plaque_length_mm == height,
             SupplierOrderLineItem.plaque_flap_mm == rabat,
             SupplierOrderLineItem.supplier_order.has(
-                SupplierOrder.status == SupplierOrderStatus.ORDERED
+                SupplierOrder.status.in_([
+                    SupplierOrderStatus.ORDERED,
+                    SupplierOrderStatus.PARTIALLY_DELIVERED
+                ])
             )
         ).all()
     
@@ -181,7 +184,10 @@ class DeliveryTrackingService:
         """Get all line items that are pending or partially delivered"""
         line_items = self.session.query(SupplierOrderLineItem).filter(
             SupplierOrderLineItem.supplier_order.has(
-                SupplierOrder.status == SupplierOrderStatus.ORDERED
+                SupplierOrder.status.in_([
+                    SupplierOrderStatus.ORDERED,
+                    SupplierOrderStatus.PARTIALLY_DELIVERED
+                ])
             )
         ).all()
         

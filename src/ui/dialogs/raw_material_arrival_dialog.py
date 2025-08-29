@@ -57,13 +57,13 @@ class RawMaterialArrivalDialog(QDialog):
         group_layout = QGridLayout(group)
         
         # Dimension inputs
-        group_layout.addWidget(QLabel("Largeur (mm):"), 0, 0)
+        group_layout.addWidget(QLabel("Langeur(mm):"), 0, 0)
         self.width_input = QSpinBox()
         self.width_input.setRange(1, 10000)
         self.width_input.setValue(1000)
         group_layout.addWidget(self.width_input, 0, 1)
         
-        group_layout.addWidget(QLabel("Hauteur (mm):"), 0, 2)
+        group_layout.addWidget(QLabel("Largeur (mm):"), 0, 2)
         self.height_input = QSpinBox()
         self.height_input.setRange(1, 10000)
         self.height_input.setValue(1000)
@@ -192,35 +192,74 @@ class RawMaterialArrivalDialog(QDialog):
             if reply != QMessageBox.StandardButton.Yes:
                 return  # Don't add the entry
         
-        # Add to internal storage
-        entry = {
-            'width': width,
-            'height': height,
-            'rabat': rabat,
-            'quantity': quantity
-        }
-        self.material_entries.append(entry)
+        # Check if an entry with the same dimensions already exists
+        existing_entry_index = self._find_existing_entry(width, height, rabat)
         
-        # Add to table
-        row = self.entries_table.rowCount()
-        self.entries_table.insertRow(row)
-        
-        self.entries_table.setItem(row, 0, QTableWidgetItem(str(width)))
-        self.entries_table.setItem(row, 1, QTableWidgetItem(str(height)))
-        self.entries_table.setItem(row, 2, QTableWidgetItem(str(rabat)))
-        self.entries_table.setItem(row, 3, QTableWidgetItem(str(quantity)))
-        
-        # Add remove button
-        remove_btn = QPushButton("🗑️")
-        remove_btn.setToolTip("Supprimer cette entrée")
-        remove_btn.clicked.connect(lambda: self._remove_entry(row))
-        self.entries_table.setCellWidget(row, 4, remove_btn)
+        if existing_entry_index is not None:
+            # Group with existing entry - sum the quantities
+            existing_entry = self.material_entries[existing_entry_index]
+            existing_entry['quantity'] += quantity
+            
+            # Update the display table
+            self.entries_table.setItem(existing_entry_index, 3, QTableWidgetItem(str(existing_entry['quantity'])))
+            
+            # Show grouping notification
+            QMessageBox.information(
+                self,
+                "Matières Groupées",
+                f"Quantité ajoutée à l'entrée existante.\n"
+                f"Dimensions: {width}×{height}×{rabat}mm\n"
+                f"Nouvelle quantité totale: {existing_entry['quantity']} plaques"
+            )
+        else:
+            # Add new entry to internal storage
+            entry = {
+                'width': width,
+                'height': height,
+                'rabat': rabat,
+                'quantity': quantity
+            }
+            self.material_entries.append(entry)
+            
+            # Add to table
+            row = self.entries_table.rowCount()
+            self.entries_table.insertRow(row)
+            
+            self.entries_table.setItem(row, 0, QTableWidgetItem(str(width)))
+            self.entries_table.setItem(row, 1, QTableWidgetItem(str(height)))
+            self.entries_table.setItem(row, 2, QTableWidgetItem(str(rabat)))
+            self.entries_table.setItem(row, 3, QTableWidgetItem(str(quantity)))
+            
+            # Add remove button
+            remove_btn = QPushButton("🗑️")
+            remove_btn.setToolTip("Supprimer cette entrée")
+            remove_btn.clicked.connect(lambda: self._remove_entry(row))
+            self.entries_table.setCellWidget(row, 4, remove_btn)
         
         # Search for related orders
         self._search_related_orders()
         
         # Reset inputs for next entry
         self.quantity_input.setValue(1)
+
+    def _find_existing_entry(self, width: int, height: int, rabat: int) -> int | None:
+        """
+        Find an existing entry with the same dimensions.
+        
+        Args:
+            width: Width in mm
+            height: Height in mm  
+            rabat: Rabat in mm
+            
+        Returns:
+            Index of existing entry if found, None otherwise
+        """
+        for i, entry in enumerate(self.material_entries):
+            if (entry['width'] == width and 
+                entry['height'] == height and 
+                entry['rabat'] == rabat):
+                return i
+        return None
 
     def _remove_entry(self, row):
         """Remove an entry from the list"""
@@ -252,13 +291,13 @@ class RawMaterialArrivalDialog(QDialog):
             self.related_supplier_orders = []
             
             # Search for supplier orders with line items that have similar dimensions
-            # Only show orders in "passé" (ORDERED) status
+            # Only show orders in "passé" (ORDERED) or "partiellement livrée" (PARTIALLY_DELIVERED) status
             for entry in self.material_entries:
                 # Query supplier orders with line items that might match dimensions
-                # Filter for only "passé" status orders
+                # Filter for "passé" and "partiellement livrée" status orders
                 supplier_orders = session.query(SupplierOrder).filter(
                     SupplierOrder.line_items.any(),
-                    SupplierOrder.status == SupplierOrderStatus.ORDERED
+                    SupplierOrder.status.in_([SupplierOrderStatus.ORDERED, SupplierOrderStatus.PARTIALLY_DELIVERED])
                 ).all()
                 
                 for supplier_order in supplier_orders:
@@ -319,6 +358,8 @@ class RawMaterialArrivalDialog(QDialog):
                 saved_deliveries = []
                 updated_line_items = []
                 supplier_orders_used = set()  # Track which supplier orders we used - initialize at method level
+                # Aggregate receptions by (supplier_order_id, width, height, rabat)
+                reception_aggregates: dict[tuple[int, int, int, int], int] = {}
                 
                 # Process each material entry
                 for entry in self.material_entries:
@@ -346,6 +387,9 @@ class RawMaterialArrivalDialog(QDialog):
                             
                             # Track supplier order for Reception creation
                             supplier_orders_used.add(line_item.supplier_order_id)
+                            # Aggregate reception quantity by (supplier_order_id, dimensions)
+                            agg_key = (line_item.supplier_order_id, entry['width'], entry['height'], entry['rabat'])
+                            reception_aggregates[agg_key] = reception_aggregates.get(agg_key, 0) + applied_quantity
                             
                             # Create delivery record
                             try:
@@ -382,56 +426,48 @@ class RawMaterialArrivalDialog(QDialog):
                                         line_item.delivery_status = DeliveryStatus.PARTIAL
                                 updated_line_items.append(line_item)
                                 remaining_quantity -= applied_quantity
-                        
-                        # Update supplier order statuses to "Partially Delivered" for affected orders
-                        for supplier_order_id in supplier_orders_used:
-                            supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == supplier_order_id).first()
-                            if supplier_order:
-                                # Check if all line items are complete or if any are partial
-                                all_complete = True
-                                any_partial = False
-                                
-                                for line_item in supplier_order.line_items:
-                                    if hasattr(line_item, 'delivery_status'):
-                                        if line_item.delivery_status == DeliveryStatus.PARTIAL:
-                                            any_partial = True
-                                            all_complete = False
-                                        elif line_item.delivery_status != DeliveryStatus.COMPLETE:
-                                            all_complete = False
-                                    else:
-                                        # If no delivery status, check quantities
-                                        received_qty = line_item.total_received_quantity or 0
-                                        if received_qty < line_item.quantity:
-                                            if received_qty > 0:
-                                                any_partial = True
-                                            all_complete = False
-                                
-                                # Update supplier order status based on line item completion
-                                if all_complete:
-                                    supplier_order.status = SupplierOrderStatus.COMPLETED
-                                elif any_partial or any(getattr(li, 'total_received_quantity', 0) > 0 for li in supplier_order.line_items):
-                                    supplier_order.status = SupplierOrderStatus.PARTIALLY_DELIVERED
-                                
-                                print(f"Updated supplier order {supplier_order_id} status to: {supplier_order.status.value}")
-                        
-                        # Create Reception records for each supplier order that was used
-                        for supplier_order_id in supplier_orders_used:
-                            reception = Reception(
-                                supplier_order_id=supplier_order_id,
-                                quantity=entry['quantity'],
-                                notes=f"Arrivée matière: {entry['width']}x{entry['height']}x{entry['rabat']}mm"
-                            )
-                            session.add(reception)
+
                     
                     else:
                         # No matching orders - this was already confirmed by user
-                        # Create a general reception record
-                        reception = Reception(
-                            supplier_order_id=1,  # Default/dummy supplier order
-                            quantity=entry['quantity'],
-                            notes=f"Plaque non-commandée: {entry['width']}x{entry['height']}x{entry['rabat']}mm"
-                        )
-                        session.add(reception)
+                        # Aggregate unmatched reception under a default/dummy supplier order
+                        key = (1, entry['width'], entry['height'], entry['rabat'])
+                        reception_aggregates[key] = reception_aggregates.get(key, 0) + entry['quantity']
+
+                # After processing all entries, update supplier orders' statuses once
+                for supplier_order_id in supplier_orders_used:
+                    supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == supplier_order_id).first()
+                    if supplier_order:
+                        # Check if all line items are complete or if any are partial
+                        all_complete = True
+                        any_partial = False
+                        for line_item in supplier_order.line_items:
+                            if hasattr(line_item, 'delivery_status'):
+                                if line_item.delivery_status == DeliveryStatus.PARTIAL:
+                                    any_partial = True
+                                    all_complete = False
+                                elif line_item.delivery_status != DeliveryStatus.COMPLETE:
+                                    all_complete = False
+                            else:
+                                received_qty = line_item.total_received_quantity or 0
+                                if received_qty < line_item.quantity:
+                                    if received_qty > 0:
+                                        any_partial = True
+                                    all_complete = False
+                        if all_complete:
+                            supplier_order.status = SupplierOrderStatus.COMPLETED
+                        elif any_partial or any(getattr(li, 'total_received_quantity', 0) > 0 for li in supplier_order.line_items):
+                            supplier_order.status = SupplierOrderStatus.PARTIALLY_DELIVERED
+                        print(f"Updated supplier order {supplier_order_id} status to: {supplier_order.status.value}")
+
+                # Create a single Reception per (supplier_order_id, dimensions)
+                for (supplier_order_id, w, h, r), qty in reception_aggregates.items():
+                    reception = Reception(
+                        supplier_order_id=supplier_order_id,
+                        quantity=qty,
+                        notes=f"Arrivée matière: {w}x{h}x{r}mm"
+                    )
+                    session.add(reception)
                 
                 session.commit()
                 
@@ -483,7 +519,10 @@ class RawMaterialArrivalDialog(QDialog):
         try:
             # Query supplier orders with "passé" status that have line items
             supplier_orders = session.query(SupplierOrder).filter(
-                SupplierOrder.status == SupplierOrderStatus.ORDERED,
+                SupplierOrder.status.in_([
+                    SupplierOrderStatus.ORDERED,
+                    SupplierOrderStatus.PARTIALLY_DELIVERED
+                ]),
                 SupplierOrder.line_items.any()
             ).all()
             
