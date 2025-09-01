@@ -1,5 +1,6 @@
 from __future__ import annotations
 import datetime
+from datetime import timezone
 import logging
 import os
 import subprocess
@@ -13,7 +14,7 @@ from models.suppliers import Supplier
 from models.clients import Client
 from models.orders import ClientOrder, SupplierOrder
 from models.orders import SupplierOrderStatus, ClientOrderStatus, Reception, Quotation
-from models.production import ProductionBatch
+from models.production import ProductionBatch, ProductionStage
 from ui.dialogs.supplier_dialog import SupplierDialog
 from ui.dialogs.client_dialog import ClientDialog
 from ui.dialogs.supplier_detail_dialog import SupplierDetailDialog
@@ -275,7 +276,7 @@ class MainWindow(QMainWindow):
         # 4. Stock (Split view: Raw materials and Finished products)
         self.stock_split = SplitView(
             "Matières Premières", ["ID", "Référence", "Quantité", "Fournisseur", "Bon Commande", "Client", "Date Réception"],
-            "Produits Finis", ["ID", "Référence", "Description", "Quantité", "Statut", "Date Production"]
+            "Produits Finis", ["ID", "Code Lot", "Client", "Dimensions Plaque", "Dimensions Caisse", "Type Carton", "Quantité", "Statut"]
         )
         # Add Raw Material Arrival button to the left side (Raw materials)
         self.stock_split.add_left_action_button("📦 Arrivée Matière Première", self._raw_material_arrival)
@@ -367,6 +368,9 @@ class MainWindow(QMainWindow):
         if self.production_grid:
             self.production_grid.add_context_action("edit", "✏️ Modifier production")
             self.production_grid.add_context_action("delete", "🗑️ Supprimer production")
+            
+            # Add "Add finished product" button to production grid
+            self.production_grid.add_action_button("➕ Ajouter Produit Fini", self._add_finished_product)
             
             # Connect production context menu signals
             self.production_grid.contextMenuActionTriggered.connect(self._handle_production_context_menu)
@@ -2072,17 +2076,70 @@ class MainWindow(QMainWindow):
             
             # Refresh stock - Finished products (production) on right side
             production_batches = session.query(ProductionBatch).all()
-            production_data = [
-                [
-                    str(pb.id),
-                    getattr(pb, 'reference', ''),  # Reference
-                    getattr(pb, 'client_order', None) and getattr(getattr(pb, 'client_order'), 'reference', 'N/A') or "N/A",  # Description (using client order ref)
-                    str(getattr(pb, 'quantity_produced', 0) or 0),  # Quantity
-                    getattr(pb, 'status', None) and getattr(pb, 'status').value or "N/A",  # Status
-                    getattr(pb, 'start_date', None) and getattr(pb, 'start_date').isoformat() or "",  # Date
-                ]
-                for pb in production_batches
-            ]
+            production_data = []
+            
+            for pb in production_batches:
+                try:
+                    # Get client order and related information
+                    client_name = "N/A"
+                    plaque_dims = "N/A"
+                    caisse_dims = "N/A"
+                    material_type = "N/A"
+                    
+                    if pb.client_order_id:
+                        client_order = session.query(ClientOrder).filter(
+                            ClientOrder.id == pb.client_order_id
+                        ).first()
+                        
+                        if client_order and client_order.supplier_order_id:
+                            supplier_order = session.query(SupplierOrder).filter(
+                                SupplierOrder.id == client_order.supplier_order_id
+                            ).first()
+                            
+                            if supplier_order and supplier_order.line_items:
+                                line_item = supplier_order.line_items[0]
+                                
+                                # Get client name from line item
+                                if line_item.client:
+                                    client_name = line_item.client.name
+                                
+                                # Get dimensions and material info
+                                plaque_dims = f"{line_item.plaque_width_mm}×{line_item.plaque_length_mm}×{line_item.plaque_flap_mm}"
+                                caisse_dims = f"{line_item.caisse_length_mm}×{line_item.caisse_width_mm}×{line_item.caisse_height_mm}"
+                                material_type = line_item.cardboard_type or "Standard"
+                    
+                    # Map stage to French text
+                    status_map = {
+                        ProductionStage.CUT_PRINT: "Découpe/Impression",
+                        ProductionStage.GLUE_ECLIPSAGE: "Collage/Éclipsage", 
+                        ProductionStage.COMPLETE: "Terminé"
+                    }
+                    status = status_map.get(pb.stage, "Inconnu")
+                    
+                    production_data.append([
+                        str(pb.id),
+                        pb.batch_code or "N/A",
+                        client_name,
+                        plaque_dims,
+                        caisse_dims,
+                        material_type,
+                        str(pb.produced_quantity or 0),
+                        status
+                    ])
+                    
+                except Exception as e:
+                    # Fallback data if there's an error loading details
+                    production_data.append([
+                        str(pb.id),
+                        pb.batch_code or "N/A",
+                        "Erreur de chargement",
+                        "N/A",
+                        "N/A", 
+                        "N/A",
+                        str(pb.produced_quantity or 0),
+                        "N/A"
+                    ])
+            
             self.stock_split.load_right_data(production_data)
             
             # Update dashboard
@@ -2868,10 +2925,116 @@ Détails individuels:"""
         finally:
             session.close()
 
+    def _add_finished_product(self):
+        """Add a new finished product from raw materials"""
+        from ui.dialogs.add_finished_product_dialog import AddFinishedProductDialog
+        from models.production import ProductionBatch, ProductionStage
+        
+        dialog = AddFinishedProductDialog(self)
+        if dialog.exec():
+            data = dialog.get_production_data()
+            if not data:
+                return
+                
+            session = SessionLocal()
+            try:
+                # Create production batch record
+                material_data = data['material_data']
+                line_item = material_data['line_item']
+                supplier_order = material_data['supplier_order']
+                
+                # Create a client order if one doesn't exist for this supplier order
+                from models.orders import ClientOrder, ClientOrderStatus
+                
+                existing_client_order = session.query(ClientOrder).filter(
+                    ClientOrder.supplier_order_id == supplier_order.id
+                ).first()
+                
+                if existing_client_order:
+                    client_order_id = existing_client_order.id
+                else:
+                    # Create new client order
+                    client_order = ClientOrder(
+                        client_id=line_item.client_id,
+                        supplier_order_id=supplier_order.id,
+                        reference=f"CMD_{supplier_order.bon_commande_ref}_{datetime.datetime.now().strftime('%Y%m%d')}",
+                        status=ClientOrderStatus.IN_PRODUCTION,
+                        total_amount=0,  # Will be calculated later
+                        notes=f"Commande créée automatiquement pour production {data['batch_code']}"
+                    )
+                    session.add(client_order)
+                    session.flush()  # Get the ID
+                    client_order_id = client_order.id
+                
+                production_batch = ProductionBatch(
+                    client_order_id=client_order_id,
+                    batch_code=data['batch_code'],
+                    stage=ProductionStage.COMPLETE,
+                    produced_quantity=data['quantity_used'],
+                    waste_quantity=0,
+                    notes=data['notes'],
+                    started_at=datetime.datetime.now(timezone.utc),
+                    completed_at=datetime.datetime.now(timezone.utc)
+                )
+                
+                session.add(production_batch)
+                
+                # Update raw material quantities
+                quantity_remaining = data['quantity_used']
+                for reception in material_data['receptions']:
+                    if quantity_remaining <= 0:
+                        break
+                        
+                    if reception.quantity <= quantity_remaining:
+                        # Use entire reception
+                        quantity_remaining -= reception.quantity
+                        session.delete(reception)
+                    else:
+                        # Use partial reception
+                        reception.quantity -= quantity_remaining
+                        quantity_remaining = 0
+                
+                session.commit()
+                
+                QMessageBox.information(
+                    self, 
+                    "Succès", 
+                    f"Produit fini créé avec succès!\nCode de lot: {data['batch_code']}"
+                )
+                
+                # Refresh both grids
+                self.refresh_all()
+                
+            except Exception as e:
+                session.rollback()
+                QMessageBox.critical(self, "Erreur", f"Erreur lors de la création du produit fini: {str(e)}")
+            finally:
+                session.close()
+
     def _edit_production(self, row_data: list):
         """Edit a production record"""
         production_id = int(row_data[0])
-        QMessageBox.information(self, 'Edit Production', f'Editing production ID: {production_id}\nFunctionality to be implemented')
+        
+        session = SessionLocal()
+        try:
+            production_batch = session.query(ProductionBatch).filter(
+                ProductionBatch.id == production_id
+            ).first()
+            
+            if not production_batch:
+                QMessageBox.warning(self, "Erreur", "Lot de production non trouvé!")
+                return
+            
+            from ui.dialogs.production_details_dialog import ProductionDetailsDialog
+            dialog = ProductionDetailsDialog(production_batch, editable=True, parent=self)
+            if dialog.exec():
+                # Refresh the grid after successful edit
+                self.refresh_all()
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Erreur lors de l'ouverture du dialogue: {str(e)}")
+        finally:
+            session.close()
 
     def _delete_production(self, row_data: list):
         """Delete a production record"""
@@ -2887,12 +3050,49 @@ Détails individuels:"""
         )
         
         if reply == QMessageBox.StandardButton.Yes:
-            QMessageBox.information(self, 'Info', 'Suppression de production - Fonctionnalité à implémenter')
+            session = SessionLocal()
+            try:
+                production_batch = session.query(ProductionBatch).filter(
+                    ProductionBatch.id == production_id
+                ).first()
+                
+                if production_batch:
+                    session.delete(production_batch)
+                    session.commit()
+                    
+                    QMessageBox.information(self, "Succès", f"Production '{production_ref}' supprimée avec succès!")
+                    self.refresh_all()
+                else:
+                    QMessageBox.warning(self, "Erreur", "Lot de production non trouvé!")
+                    
+            except Exception as e:
+                session.rollback()
+                QMessageBox.critical(self, "Erreur", f"Erreur lors de la suppression: {str(e)}")
+            finally:
+                session.close()
 
     def _show_production_details(self, row_data: list):
         """Show detailed information about a production"""
         production_id = int(row_data[0])
-        QMessageBox.information(self, 'Info', f'Détails de production ID: {production_id} - Fonctionnalité à implémenter')
+        
+        session = SessionLocal()
+        try:
+            production_batch = session.query(ProductionBatch).filter(
+                ProductionBatch.id == production_id
+            ).first()
+            
+            if not production_batch:
+                QMessageBox.warning(self, "Erreur", "Lot de production non trouvé!")
+                return
+            
+            from ui.dialogs.production_details_dialog import ProductionDetailsDialog
+            dialog = ProductionDetailsDialog(production_batch, editable=False, parent=self)
+            dialog.exec()
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Erreur", f"Erreur lors de l'ouverture du dialogue: {str(e)}")
+        finally:
+            session.close()
 
     def _load_stock_data(self):
         """Refresh the stock data display"""
