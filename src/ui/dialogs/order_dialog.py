@@ -7,7 +7,13 @@ class OrderDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle('Nouvelle Commande Client')
+        
+        # Auto-generate reference using unified system
+        from utils.reference_generator import generate_client_order_reference
         self.ref_edit = QLineEdit()
+        self.ref_edit.setText(generate_client_order_reference())
+        self.ref_edit.setPlaceholderText('Ex: CMD-20250902-143027-0001')
+        
         self.date_edit = QDateEdit()
         self.date_edit.setDate(QDate.currentDate())
         self._build()

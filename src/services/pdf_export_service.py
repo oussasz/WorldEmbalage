@@ -197,10 +197,9 @@ def _prepare_finished_product_data(batch, client_order, quantity: int, copy_numb
     if not dimensions:
         dimensions = "Dimensions non spécifiées"
     
-    # Generate unique reference for this fiche
-    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-    batch_ref = batch.batch_code or f"B{batch.id}"
-    reference = f"FPF-{batch_ref}-{copy_number:03d}-{timestamp}"
+    # Generate unique reference for this fiche using unified system
+    from utils.reference_generator import generate_finished_product_reference
+    reference = generate_finished_product_reference(f"COPIE{copy_number:03d}")
     
     # Add copy information if multiple copies
     copy_info = ""
@@ -331,10 +330,10 @@ def _prepare_raw_material_label_data_simple(reception_ids: list[int], total_quan
     # Get client names
     client_name = ", ".join(sorted(clients)) if clients else "Client non spécifié"
     
-    # Generate unique label number
-    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    # Generate unique label number using unified system
+    from utils.reference_generator import generate_raw_material_label_reference
     ids_str = "_".join(map(str, reception_ids))
-    label_number = f"MP-{ids_str}-{timestamp}"
+    label_number = generate_raw_material_label_reference(ids_str)
     
     # Get bon de commande reference
     bon_commande = ""

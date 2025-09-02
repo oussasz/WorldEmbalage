@@ -15,11 +15,12 @@ class SupplierOrderDialog(QDialog):
     def _build_ui(self):
         layout = QVBoxLayout(self)
         
-        # Reference - Auto-generated using standardized method
+        # Reference - Auto-generated using unified reference system
         layout.addWidget(QLabel('Référence:'))
-        from utils.helpers import generate_reference
+        from utils.reference_generator import generate_supplier_order_reference
         self.ref_edit = QLineEdit()
-        self.ref_edit.setText(generate_reference("CMD"))  # Auto-generate with CMD prefix
+        self.ref_edit.setText(generate_supplier_order_reference())  # Auto-generate with standardized format
+        self.ref_edit.setPlaceholderText('Ex: BC-20250902-143027-0001')
         layout.addWidget(self.ref_edit)
         
         # Supplier

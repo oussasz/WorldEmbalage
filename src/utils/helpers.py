@@ -1,42 +1,83 @@
 from __future__ import annotations
-import secrets
-from datetime import datetime
+
+# Import the new unified reference generation system
+from .reference_generator import (
+    ReferenceGenerator,
+    generate_quotation_reference,
+    generate_supplier_order_reference,
+    generate_client_order_reference,
+    generate_finished_product_reference,
+    generate_raw_material_label_reference,
+    generate_delivery_reference,
+    generate_invoice_reference,
+    generate_reception_reference,
+    generate_return_reference,
+    generate_production_reference,
+    generate_stock_movement_reference
+)
 
 
 def generate_reference(prefix: str) -> str:
-    return f"{prefix}-{secrets.token_hex(3).upper()}"
+    """
+    Legacy function for backward compatibility.
+    Now uses the unified reference generation system.
+    """
+    prefix_mapping = {
+        'DEV': 'quotation',
+        'BC': 'supplier_order', 
+        'CMD': 'client_order',
+        'FPF': 'finished_product',
+        'MP': 'raw_material_label',
+        'LIV': 'delivery',
+        'FAC': 'invoice',
+        'REC': 'reception',
+        'RET': 'return',
+        'PROD': 'production',
+        'MVT': 'stock_movement'
+    }
+    
+    document_type = prefix_mapping.get(prefix)
+    if document_type:
+        return ReferenceGenerator.generate(document_type)
+    else:
+        # For compatibility with any unknown prefixes
+        import secrets
+        return f"{prefix}-{secrets.token_hex(3).upper()}"
 
 
 def generate_bon_commande_ref() -> str:
-    """Generate a BC reference in format BC{number}/{year}"""
-    from config.database import SessionLocal
-    from models.orders import SupplierOrder
-    from sqlalchemy import func, text
-    
-    session = SessionLocal()
-    try:
-        current_year = datetime.now().year
-        
-        # Get the next number for this year
-        result = session.execute(
-            text("""
-                SELECT COALESCE(MAX(
-                    CAST(SUBSTRING(bon_commande_ref, 3, POSITION('/' IN bon_commande_ref) - 3) AS INTEGER)
-                ), 0) + 1 as next_number
-                FROM supplier_orders 
-                WHERE bon_commande_ref LIKE :pattern
-            """),
-            {"pattern": f"BC%/{current_year}"}
-        ).scalar()
-        
-        next_number = result if result else 1
-        return f"BC{next_number:02d}/{current_year}"
-        
-    except Exception:
-        # Fallback to simple numbering if query fails
-        return f"BC01/{datetime.now().year}"
-    finally:
-        session.close()
+    """
+    Generate a supplier order reference using the new unified system.
+    For backward compatibility, this function is maintained but now uses
+    the standardized format instead of the legacy BC{number}/{year} format.
+    """
+    return generate_supplier_order_reference()
 
 
-__all__ = ['generate_reference', 'generate_bon_commande_ref']
+def generate_bon_commande_ref_legacy() -> str:
+    """
+    Generate a BC reference in legacy format BC{number}/{year}.
+    This function is kept for transition period only.
+    Use generate_supplier_order_reference() for new implementations.
+    """
+    return ReferenceGenerator.generate_legacy_bc_format()
+
+
+__all__ = [
+    'generate_reference', 
+    'generate_bon_commande_ref',
+    'generate_bon_commande_ref_legacy',
+    # Export all the new reference generators
+    'ReferenceGenerator',
+    'generate_quotation_reference',
+    'generate_supplier_order_reference',
+    'generate_client_order_reference',
+    'generate_finished_product_reference',
+    'generate_raw_material_label_reference',
+    'generate_delivery_reference',
+    'generate_invoice_reference',
+    'generate_reception_reference',
+    'generate_return_reference',
+    'generate_production_reference',
+    'generate_stock_movement_reference'
+]

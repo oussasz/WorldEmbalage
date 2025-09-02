@@ -35,11 +35,11 @@ class RawMaterialOrderDialog(QDialog):
         order_layout = QFormLayout(order_frame)
         order_layout.setSpacing(15)
         
-        # Reference - Auto-generated using standardized method
-        from utils.helpers import generate_reference
+        # Reference - Auto-generated using unified reference system
+        from utils.reference_generator import generate_supplier_order_reference
         self.ref_edit = QLineEdit()
-        self.ref_edit.setText(generate_reference("MAT"))  # Auto-generate with MAT prefix
-        self.ref_edit.setPlaceholderText('Ex: MAT-ABC123')
+        self.ref_edit.setText(generate_supplier_order_reference())  # Auto-generate with standardized format
+        self.ref_edit.setPlaceholderText('Ex: BC-20250902-143027-0001')
         order_layout.addRow('Référence commande:', self.ref_edit)
         
         # Supplier

@@ -105,7 +105,7 @@ class AddFinishedProductDialog(QDialog):
         production_layout = QFormLayout(production_group)
         
         self.batch_code_edit = QLineEdit()
-        self.batch_code_edit.setPlaceholderText("Ex: PROD-2025-001")
+        self.batch_code_edit.setPlaceholderText("Ex: PROD-20250902-143027-0001-ABC")
         production_layout.addRow("Code du lot:", self.batch_code_edit)
         
         self.production_date_edit = QDateEdit()
@@ -240,41 +240,12 @@ class AddFinishedProductDialog(QDialog):
         # Order reference
         self.order_ref_edit.setText(supplier_order.bon_commande_ref or supplier_order.reference)
         
-        # Generate batch code suggestion
+        # Generate batch code suggestion using unified reference system
         if not self.batch_code_edit.text():
-            from datetime import datetime
-            from models.production import ProductionBatch
-            import random
-            
-            # Create a unique batch code
-            session = SessionLocal()
+            from utils.reference_generator import generate_production_reference
             client_short = material_data['client_name'][:3].upper()
-            
-            try:
-                attempts = 0
-                max_attempts = 10
-                
-                while attempts < max_attempts:
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    random_suffix = random.randint(10, 99)
-                    suggested_code = f"PROD_{client_short}_{timestamp}_{random_suffix}"
-                    
-                    # Check if this batch code already exists
-                    existing = session.query(ProductionBatch).filter_by(batch_code=suggested_code).first()
-                    if not existing:
-                        self.batch_code_edit.setText(suggested_code)
-                        break
-                        
-                    attempts += 1
-                    
-                if attempts >= max_attempts:
-                    # Fallback to timestamp with milliseconds
-                    import time
-                    timestamp_ms = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
-                    suggested_code = f"PROD_{client_short}_{timestamp_ms}"
-                    self.batch_code_edit.setText(suggested_code)
-            finally:
-                session.close()
+            suggested_code = generate_production_reference(client_short)
+            self.batch_code_edit.setText(suggested_code)
     
     def _calculate_loss(self):
         """Calculate and display the loss (used quantity - produced quantity)"""

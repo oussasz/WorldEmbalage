@@ -31,11 +31,11 @@ class QuotationDialog(QDialog):
         form_layout.setSpacing(15)
         form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         
-        # Référence - Auto-generated using standardized method
-        from utils.helpers import generate_reference
+        # Référence - Auto-generated using unified reference system
+        from utils.reference_generator import generate_quotation_reference
         self.ref_edit = QLineEdit()
-        self.ref_edit.setText(generate_reference("DEV"))  # Auto-generate with DEV prefix
-        self.ref_edit.setPlaceholderText('Ex: DEV-ABC123')
+        self.ref_edit.setText(generate_quotation_reference())  # Auto-generate with standardized format
+        self.ref_edit.setPlaceholderText('Ex: DEV-20250902-143027-0001')
         form_layout.addRow('Référence:', self.ref_edit)
         
         # Client

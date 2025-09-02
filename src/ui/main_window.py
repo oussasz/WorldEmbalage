@@ -2949,11 +2949,12 @@ Détails individuels:"""
                 if existing_client_order:
                     client_order_id = existing_client_order.id
                 else:
-                    # Create new client order
+                    # Create new client order using unified reference system
+                    from utils.reference_generator import generate_client_order_reference
                     client_order = ClientOrder(
                         client_id=line_item.client_id,
                         supplier_order_id=supplier_order.id,
-                        reference=f"CMD_{supplier_order.bon_commande_ref}_{datetime.datetime.now().strftime('%Y%m%d')}",
+                        reference=generate_client_order_reference(supplier_order.bon_commande_ref),
                         status=ClientOrderStatus.IN_PRODUCTION,
                         total_amount=0,  # Will be calculated later
                         notes=f"Commande créée automatiquement pour production {data['batch_code']}"
