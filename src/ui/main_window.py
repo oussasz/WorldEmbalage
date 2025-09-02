@@ -368,6 +368,7 @@ class MainWindow(QMainWindow):
         if self.production_grid:
             self.production_grid.add_context_action("edit", "✏️ Modifier production")
             self.production_grid.add_context_action("delete", "🗑️ Supprimer production")
+            self.production_grid.add_context_action("print_fiche", "🖨️ Imprimer la fiche de produit fini")
             
             # Add "Add finished product" button to production grid
             self.production_grid.add_action_button("➕ Ajouter Produit Fini", self._add_finished_product)
@@ -2540,6 +2541,8 @@ class MainWindow(QMainWindow):
             self._edit_production(row_data)
         elif action_name == "delete":
             self._delete_production(row_data)
+        elif action_name == "print_fiche":
+            self._print_finished_product_fiche(row_data)
 
     def _on_production_double_click(self, row: int):
         """Handle double-click on production item (finished products)"""
@@ -3127,5 +3130,91 @@ Détails individuels:"""
             self.refresh_all()
         except Exception as e:
             print(f"Error refreshing stock data: {e}")
+
+    def _print_finished_product_fiche(self, row_data: list):
+        """Handle printing finished product fiche with pallet options"""
+        try:
+            # Extract production batch ID from row data
+            # Assuming the first column contains the batch ID
+            if not row_data or len(row_data) == 0:
+                QMessageBox.warning(self, "Erreur", "Aucune donnée de production sélectionnée.")
+                return
+            
+            # Get batch ID and quantity from row data
+            # Column structure: ["ID", "Client", "Dimensions Caisse", "Quantité", "Statut"]
+            batch_id = int(row_data[0]) if row_data[0] else None
+            client_name = row_data[1] if len(row_data) > 1 else ""
+            dimensions = row_data[2] if len(row_data) > 2 else ""
+            total_quantity = int(row_data[3]) if len(row_data) > 3 and row_data[3] else 0
+            
+            if not batch_id:
+                QMessageBox.warning(self, "Erreur", "ID de lot de production invalide.")
+                return
+                
+            if total_quantity <= 0:
+                QMessageBox.warning(self, "Erreur", "Quantité invalide.")
+                return
+            
+            # Show pallet delivery dialog
+            from ui.dialogs.pallet_delivery_dialog import PalletDeliveryDialog
+            delivery_dialog = PalletDeliveryDialog(total_quantity, self)
+            
+            if delivery_dialog.exec() == QDialog.DialogCode.Accepted:
+                delivery_options = delivery_dialog.get_delivery_options()
+                pallets = delivery_dialog.calculate_pallets()
+                
+                # Generate PDFs based on pallet distribution
+                from services.pdf_export_service import export_finished_product_fiche
+                
+                generated_files = []
+                copy_number = 1
+                total_copies = sum(copies for _, copies in pallets)
+                
+                for quantity_per_pallet, num_copies in pallets:
+                    for copy in range(num_copies):
+                        try:
+                            pdf_path = export_finished_product_fiche(
+                                batch_id, 
+                                quantity_per_pallet, 
+                                copy_number, 
+                                total_copies,
+                                dimensions  # Pass dimensions from grid
+                            )
+                            if pdf_path:
+                                generated_files.append(pdf_path)
+                            copy_number += 1
+                        except Exception as e:
+                            print(f"Error generating PDF for copy {copy_number}: {e}")
+                            continue
+                
+                if generated_files:
+                    # Show success message with file count
+                    file_count = len(generated_files)
+                    message = f"{file_count} fiche(s) de produit fini générée(s) avec succès.\n\n"
+                    message += "Fichiers générés:\n"
+                    for file_path in generated_files:
+                        message += f"- {file_path.name}\n"
+                    
+                    QMessageBox.information(self, "Succès", message)
+                    
+                    # Optionally open the generated reports folder
+                    import subprocess
+                    import platform
+                    
+                    reports_dir = generated_files[0].parent
+                    if platform.system() == "Windows":
+                        subprocess.run(f'explorer "{reports_dir}"', shell=True)
+                    elif platform.system() == "Darwin":  # macOS
+                        subprocess.run(["open", str(reports_dir)])
+                    else:  # Linux
+                        subprocess.run(["xdg-open", str(reports_dir)])
+                        
+                else:
+                    QMessageBox.warning(self, "Erreur", "Aucun fichier PDF n'a pu être généré.")
+            
+        except Exception as e:
+            print(f"Error printing finished product fiche: {e}")
+            QMessageBox.critical(self, "Erreur", f"Erreur lors de la génération de la fiche: {str(e)}")
+
 
 __all__ = ['MainWindow']

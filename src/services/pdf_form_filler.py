@@ -877,5 +877,149 @@ class PDFFormFiller:
         
         return form_data
 
+    def fill_finished_product_template(self, product_data: Dict[str, Any], output_filename: str | None = None) -> Path:
+        """
+        Fill the finished product fiche PDF template (PF.pdf) with product data.
+        
+        Args:
+            product_data: Dictionary containing finished product information
+            output_filename: Optional custom filename for output
+            
+        Returns:
+            Path to the generated PDF file
+        """
+        template_path = self.template_dir / "PF.pdf"
+        
+        if not template_path.exists():
+            raise PDFFillError(f"Template not found: {template_path}")
+        
+        # Generate output filename if not provided
+        if not output_filename:
+            client = product_data.get('client', 'client')
+            timestamp = date.today().strftime('%Y%m%d_%H%M%S')
+            quantity = product_data.get('quantity', '0')
+            output_filename = f"fiche_produit_fini_{client}_{quantity}_{timestamp}.pdf"
+        
+        output_path = self.output_dir / output_filename
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Try to use PyPDF2 for form filling if available
+        if self._ensure_pypdf_installed():
+            return self._fill_finished_product_pypdf(template_path, product_data, output_path)
+        else:
+            # Fallback to overlay method
+            return self._fill_finished_product_overlay(template_path, product_data, output_path)
+    
+    def _fill_finished_product_pypdf(self, template_path: Path, data: Dict[str, Any], output_path: Path) -> Path:
+        """Fill finished product PDF using PyPDF2 form fields."""
+        try:
+            import PyPDF2  # type: ignore
+        except ImportError:
+            raise PDFFillError("PyPDF2 not available")
+        
+        try:
+            with open(template_path, 'rb') as template_file:
+                pdf_reader = PyPDF2.PdfReader(template_file)
+                pdf_writer = PyPDF2.PdfWriter()
+                
+                # Check if PDF has form fields
+                if pdf_reader.get_fields():
+                    # Fill form fields
+                    field_data = self._prepare_finished_product_form_data(data)
+                    
+                    for page in pdf_reader.pages:
+                        pdf_writer.add_page(page)
+                    
+                    pdf_writer.update_page_form_field_values(pdf_writer.pages[0], field_data)
+                    
+                    with open(output_path, 'wb') as output_file:
+                        pdf_writer.write(output_file)
+                else:
+                    # No form fields, use overlay method
+                    return self._fill_finished_product_overlay(template_path, data, output_path)
+                
+            return output_path
+        except Exception as e:
+            raise PDFFillError(f"Error filling finished product PDF: {e}")
+    
+    def _fill_finished_product_overlay(self, template_path: Path, data: Dict[str, Any], output_path: Path) -> Path:
+        """Fill finished product PDF using overlay method."""
+        try:
+            import PyPDF2  # type: ignore
+        except ImportError:
+            raise PDFFillError("PyPDF2 not available for overlay method")
+        
+        try:
+            # Create overlay with text
+            overlay_path = self._create_finished_product_overlay(data)
+            
+            # Merge overlay with template
+            with open(template_path, 'rb') as template_file, open(overlay_path, 'rb') as overlay_file:
+                template_pdf = PyPDF2.PdfReader(template_file)
+                overlay_pdf = PyPDF2.PdfReader(overlay_file)
+                
+                pdf_writer = PyPDF2.PdfWriter()
+                
+                # Merge pages
+                template_page = template_pdf.pages[0]
+                overlay_page = overlay_pdf.pages[0]
+                template_page.merge_page(overlay_page)
+                pdf_writer.add_page(template_page)
+                
+                with open(output_path, 'wb') as output_file:
+                    pdf_writer.write(output_file)
+            
+            # Clean up temporary overlay file
+            overlay_path.unlink()
+            
+            return output_path
+        except Exception as e:
+            raise PDFFillError(f"Error creating finished product PDF overlay: {e}")
+    
+    def _prepare_finished_product_form_data(self, data: Dict[str, Any]) -> Dict[str, str]:
+        """Prepare form field data for finished product template."""
+        return {
+            'date_production': str(data.get('production_date', '')),
+            'client': str(data.get('client', '')),
+            'quantite': str(data.get('quantity', '')),
+            'dimensions': str(data.get('dimensions', '')),
+            'reference': str(data.get('reference', ''))
+        }
+    
+    def _create_finished_product_overlay(self, data: Dict[str, Any]) -> Path:
+        """Create a text overlay for finished product data."""
+        overlay_path = Path(tempfile.mktemp(suffix='.pdf'))
+        
+        # Create PDF with text at specific positions
+        c = canvas.Canvas(str(overlay_path), pagesize=A4)
+        width, height = A4
+        
+        # Set font
+        c.setFont("Helvetica", 12)
+        
+        # Add text at approximate positions (adjust as needed based on template)
+        # Reference (top of document)
+        reference = data.get('reference', '')
+        c.drawString(400, height - 100, f"Réf: {reference}")
+        
+        # Date de production
+        production_date = data.get('production_date', '')
+        c.drawString(150, height - 150, str(production_date))
+        
+        # Client
+        client = data.get('client', '')
+        c.drawString(150, height - 200, str(client))
+        
+        # Quantité
+        quantity = data.get('quantity', '')
+        c.drawString(150, height - 250, f"{quantity} caisses")
+        
+        # Dimensions de caisse
+        dimensions = data.get('dimensions', '')
+        c.drawString(150, height - 300, str(dimensions))
+        
+        c.save()
+        return overlay_path
+
 
 __all__ = ['PDFFormFiller', 'PDFFillError']
