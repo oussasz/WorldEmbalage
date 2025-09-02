@@ -1021,5 +1021,174 @@ class PDFFormFiller:
         c.save()
         return overlay_path
 
+    def fill_raw_material_label_template(self, label_data: Dict[str, Any], output_filename: str | None = None) -> Path:
+        """
+        Fill the raw material label PDF template (MP.pdf) with label data.
+        
+        Args:
+            label_data: Dictionary containing raw material label information
+            output_filename: Optional custom filename for output
+            
+        Returns:
+            Path to the generated PDF file
+        """
+        template_path = self.template_dir / "MP.pdf"
+        
+        if not template_path.exists():
+            raise PDFFillError(f"Template not found: {template_path}")
+        
+        # Generate output filename if not provided
+        if not output_filename:
+            client = label_data.get('client', 'client')
+            timestamp = date.today().strftime('%Y%m%d_%H%M%S')
+            label_number = label_data.get('label_number', '000')
+            output_filename = f"etiquette_mp_{client}_{label_number}_{timestamp}.pdf"
+        
+        output_path = self.output_dir / output_filename
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Try to use PyPDF2 for form filling if available
+        if self._ensure_pypdf_installed():
+            return self._fill_raw_material_label_pypdf(template_path, label_data, output_path)
+        else:
+            # Fallback to overlay method
+            return self._fill_raw_material_label_overlay(template_path, label_data, output_path)
+    
+    def _fill_raw_material_label_pypdf(self, template_path: Path, data: Dict[str, Any], output_path: Path) -> Path:
+        """Fill raw material label PDF using PyPDF2 form fields."""
+        try:
+            import PyPDF2  # type: ignore
+        except ImportError:
+            raise PDFFillError("PyPDF2 not available")
+        
+        try:
+            with open(template_path, 'rb') as template_file:
+                pdf_reader = PyPDF2.PdfReader(template_file)
+                pdf_writer = PyPDF2.PdfWriter()
+                
+                # Check if PDF has form fields
+                if pdf_reader.get_fields():
+                    # Fill form fields
+                    field_data = self._prepare_raw_material_label_form_data(data)
+                    
+                    for page in pdf_reader.pages:
+                        pdf_writer.add_page(page)
+                    
+                    pdf_writer.update_page_form_field_values(pdf_writer.pages[0], field_data)
+                    
+                    with open(output_path, 'wb') as output_file:
+                        pdf_writer.write(output_file)
+                else:
+                    # No form fields, use overlay method
+                    return self._fill_raw_material_label_overlay(template_path, data, output_path)
+                
+            return output_path
+        except Exception as e:
+            raise PDFFillError(f"Error filling raw material label PDF: {e}")
+    
+    def _fill_raw_material_label_overlay(self, template_path: Path, data: Dict[str, Any], output_path: Path) -> Path:
+        """Fill raw material label PDF using overlay method."""
+        try:
+            import PyPDF2  # type: ignore
+        except ImportError:
+            raise PDFFillError("PyPDF2 not available for overlay method")
+        
+        try:
+            # Create overlay with text
+            overlay_path = self._create_raw_material_label_overlay(data)
+            
+            # Merge overlay with template
+            with open(template_path, 'rb') as template_file, open(overlay_path, 'rb') as overlay_file:
+                template_pdf = PyPDF2.PdfReader(template_file)
+                overlay_pdf = PyPDF2.PdfReader(overlay_file)
+                
+                pdf_writer = PyPDF2.PdfWriter()
+                
+                # Merge pages
+                template_page = template_pdf.pages[0]
+                overlay_page = overlay_pdf.pages[0]
+                template_page.merge_page(overlay_page)
+                pdf_writer.add_page(template_page)
+                
+                with open(output_path, 'wb') as output_file:
+                    pdf_writer.write(output_file)
+            
+            # Clean up temporary overlay file
+            overlay_path.unlink()
+            
+            return output_path
+        except Exception as e:
+            raise PDFFillError(f"Error creating raw material label PDF overlay: {e}")
+    
+    def _prepare_raw_material_label_form_data(self, data: Dict[str, Any]) -> Dict[str, str]:
+        """Prepare form field data for raw material label template."""
+        return {
+            'derniere_date_arrivee': str(data.get('arrival_date', '')),
+            'client': str(data.get('client', '')),
+            'quantite': str(data.get('quantity', '')),
+            'numero_etiquette': str(data.get('label_number', '')),
+            'dimension_plaque': str(data.get('plaque_dimensions', '')),
+            'dimension_caisse': str(data.get('caisse_dimensions', '')),
+            'cliche': str(data.get('cliche', 'Non')),
+            'remarque': str(data.get('remark', '')),
+            'numero_bon_commande': str(data.get('bon_commande', '')),
+            'reste': str(data.get('remaining_quantity', ''))
+        }
+    
+    def _create_raw_material_label_overlay(self, data: Dict[str, Any]) -> Path:
+        """Create a text overlay for raw material label data."""
+        overlay_path = Path(tempfile.mktemp(suffix='.pdf'))
+        
+        # Create PDF with text at specific positions
+        c = canvas.Canvas(str(overlay_path), pagesize=A4)
+        width, height = A4
+        
+        # Set font
+        c.setFont("Helvetica", 10)
+        
+        # Add text at approximate positions (adjust as needed based on template)
+        # Dernière date d'arrivée
+        arrival_date = data.get('arrival_date', '')
+        c.drawString(150, height - 120, str(arrival_date))
+        
+        # Client
+        client = data.get('client', '')
+        c.drawString(150, height - 150, str(client))
+        
+        # Quantité
+        quantity = data.get('quantity', '')
+        c.drawString(150, height - 180, f"{quantity} plaques")
+        
+        # N° étiquette
+        label_number = data.get('label_number', '')
+        c.drawString(400, height - 120, str(label_number))
+        
+        # Dimension plaque
+        plaque_dimensions = data.get('plaque_dimensions', '')
+        c.drawString(150, height - 210, str(plaque_dimensions))
+        
+        # Dimension caisse
+        caisse_dimensions = data.get('caisse_dimensions', '')
+        c.drawString(150, height - 240, str(caisse_dimensions))
+        
+        # Cliché
+        cliche = data.get('cliche', 'Non')
+        c.drawString(150, height - 270, str(cliche))
+        
+        # Remarque
+        remark = data.get('remark', '')
+        c.drawString(150, height - 300, str(remark))
+        
+        # Numéro de Bon de commande
+        bon_commande = data.get('bon_commande', '')
+        c.drawString(150, height - 330, str(bon_commande))
+        
+        # Resté
+        remaining = data.get('remaining_quantity', '')
+        c.drawString(150, height - 360, f"Resté: {remaining}")
+        
+        c.save()
+        return overlay_path
+
 
 __all__ = ['PDFFormFiller', 'PDFFillError']

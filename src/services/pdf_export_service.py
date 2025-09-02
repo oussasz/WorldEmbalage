@@ -216,3 +216,140 @@ def _prepare_finished_product_data(batch, client_order, quantity: int, copy_numb
         'reference': reference,
         'copy_info': copy_info
     }
+
+
+def export_raw_material_label(reception_ids: list[int], remark: str = "") -> Path | None:
+    """
+    Export a raw material label to PDF using the MP.pdf template.
+    
+    Args:
+        reception_ids: List of reception IDs (for grouped receptions)
+        remark: Optional remark to include on the label
+        
+    Returns:
+        Path to the generated PDF file, or None if export failed
+    """
+    from models.orders import SupplierOrderLineItem, SupplierOrder, Reception
+    from models.clients import Client
+    from sqlalchemy.orm import joinedload
+    
+    session = SessionLocal()
+    try:
+        # Get the receptions
+        receptions = session.query(Reception).filter(Reception.id.in_(reception_ids)).all()
+        
+        if not receptions:
+            return None
+        
+        # Use the first reception as the primary one for extracting information
+        primary_reception = receptions[0]
+        supplier_order = primary_reception.supplier_order
+        
+        if not supplier_order:
+            return None
+        
+        # Calculate total quantity from all receptions
+        total_quantity = sum(r.quantity for r in receptions)
+        
+        # Get the most recent arrival date
+        latest_date = None
+        if receptions:
+            for r in receptions:
+                if r.reception_date:
+                    latest_date = r.reception_date
+                    break  # Use the first available date for now
+        
+        # Extract information from supplier order and line items
+        line_items = supplier_order.line_items if hasattr(supplier_order, 'line_items') else []
+        
+        # Get client information from line items
+        clients = set()
+        plaque_dimensions = ""
+        caisse_dimensions = ""
+        total_ordered = 0
+        is_cliche = False  # Default to False as SupplierOrderLineItem doesn't have is_cliche field
+        
+        for item in line_items:
+            if hasattr(item, 'client') and item.client:
+                clients.add(item.client.name)
+            
+            total_ordered += item.quantity
+            
+            # Get dimensions from the first line item
+            if not plaque_dimensions and item.plaque_length_mm and item.plaque_width_mm:
+                plaque_dimensions = f"{item.plaque_length_mm} x {item.plaque_width_mm} mm"
+            
+            if not caisse_dimensions and item.caisse_length_mm and item.caisse_width_mm and item.caisse_height_mm:
+                caisse_dimensions = f"{item.caisse_length_mm} x {item.caisse_width_mm} x {item.caisse_height_mm} mm"
+        
+        # Calculate remaining quantity
+        remaining_quantity = max(0, total_ordered - total_quantity)
+        
+        # Prepare data for PDF template
+        label_data = _prepare_raw_material_label_data_simple(
+            reception_ids, total_quantity, latest_date, supplier_order, 
+            clients, plaque_dimensions, caisse_dimensions, is_cliche, 
+            remaining_quantity, remark
+        )
+        
+        # Generate PDF using template
+        pdf_filler = PDFFormFiller()
+        try:
+            # Generate unique filename
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            client_names = "_".join(sorted(clients)) if clients else 'client'
+            label_number = label_data.get('label_number', '000')
+            filename = f"etiquette_mp_{client_names}_{label_number}_{timestamp}.pdf"
+            
+            output_path = pdf_filler.fill_raw_material_label_template(label_data, filename)
+            return output_path
+        except PDFFillError as e:
+            print(f"PDF generation error: {e}")
+            return None
+            
+    except Exception as e:
+        print(f"Error exporting raw material label to PDF: {e}")
+        return None
+    finally:
+        session.close()
+
+
+def _prepare_raw_material_label_data_simple(reception_ids: list[int], total_quantity: int, latest_date, 
+                                           supplier_order, clients: set, plaque_dimensions: str, 
+                                           caisse_dimensions: str, is_cliche: bool, remaining_quantity: int, 
+                                           remark: str) -> Dict[str, Any]:
+    """Prepare raw material label data for PDF template."""
+    
+    # Format arrival date
+    arrival_date = ""
+    if latest_date:
+        if isinstance(latest_date, str):
+            arrival_date = latest_date
+        else:
+            arrival_date = latest_date.strftime('%d/%m/%Y')
+    
+    # Get client names
+    client_name = ", ".join(sorted(clients)) if clients else "Client non spécifié"
+    
+    # Generate unique label number
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+    ids_str = "_".join(map(str, reception_ids))
+    label_number = f"MP-{ids_str}-{timestamp}"
+    
+    # Get bon de commande reference
+    bon_commande = ""
+    if supplier_order:
+        bon_commande = supplier_order.bon_commande_ref or supplier_order.reference or ""
+    
+    return {
+        'arrival_date': arrival_date,
+        'client': client_name,
+        'quantity': total_quantity,
+        'label_number': label_number,
+        'plaque_dimensions': plaque_dimensions or "Non spécifiées",
+        'caisse_dimensions': caisse_dimensions or "Non spécifiées", 
+        'cliche': "Oui" if is_cliche else "Non",
+        'remark': remark,
+        'bon_commande': bon_commande,
+        'remaining_quantity': remaining_quantity
+    }

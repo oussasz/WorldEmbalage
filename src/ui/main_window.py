@@ -359,6 +359,7 @@ class MainWindow(QMainWindow):
         if self.receptions_grid:
             self.receptions_grid.add_context_action("edit", "✏️ Modifier réception")
             self.receptions_grid.add_context_action("delete", "🗑️ Supprimer réception")
+            self.receptions_grid.add_context_action("print_label", "🏷️ Imprimer l'étiquette matière première")
             
             # Connect stock context menu signals
             self.receptions_grid.contextMenuActionTriggered.connect(self._handle_stock_context_menu)
@@ -2517,6 +2518,8 @@ class MainWindow(QMainWindow):
             self._edit_reception(row_data)
         elif action_name == "delete":
             self._delete_reception(row_data)
+        elif action_name == "print_label":
+            self._print_raw_material_label(row_data)
 
     def _on_stock_double_click(self, row: int):
         """Handle double-click on stock item (raw materials)"""
@@ -3215,6 +3218,81 @@ Détails individuels:"""
         except Exception as e:
             print(f"Error printing finished product fiche: {e}")
             QMessageBox.critical(self, "Erreur", f"Erreur lors de la génération de la fiche: {str(e)}")
+
+    def _print_raw_material_label(self, row_data: list):
+        """Handle printing raw material label with optional remark"""
+        try:
+            # Extract reception data from row
+            # Column structure: ["ID", "Quantité", "Fournisseur", "Bon Commande", "Client", "Date Réception"]
+            if not row_data or len(row_data) == 0:
+                QMessageBox.warning(self, "Erreur", "Aucune donnée de réception sélectionnée.")
+                return
+            
+            # Parse reception IDs (can be comma-separated for grouped receptions)
+            ids_str = row_data[0]
+            try:
+                reception_ids = [int(id_str.strip()) for id_str in ids_str.split(',')]
+            except (ValueError, AttributeError):
+                QMessageBox.warning(self, "Erreur", "ID de réception invalide.")
+                return
+            
+            quantity = row_data[1] if len(row_data) > 1 else "0"
+            supplier = row_data[2] if len(row_data) > 2 else "N/A"
+            bon_commande = row_data[3] if len(row_data) > 3 else "N/A"
+            client = row_data[4] if len(row_data) > 4 else "N/A"
+            date_reception = row_data[5] if len(row_data) > 5 else "N/A"
+            
+            # Prepare material info for the dialog
+            material_info = {
+                'client': client,
+                'quantity': quantity,
+                'supplier': supplier,
+                'bon_commande': bon_commande,
+                'date_reception': date_reception,
+                'plaque_dimensions': 'N/A'  # Will be filled from database
+            }
+            
+            # Show dialog to collect optional remark
+            from ui.dialogs.raw_material_label_dialog import RawMaterialLabelDialog
+            label_dialog = RawMaterialLabelDialog(material_info, self)
+            
+            if label_dialog.exec() == QDialog.DialogCode.Accepted:
+                remark = label_dialog.get_remark()
+                
+                # Generate PDF label
+                from services.pdf_export_service import export_raw_material_label
+                
+                try:
+                    pdf_path = export_raw_material_label(reception_ids, remark)
+                    
+                    if pdf_path:
+                        QMessageBox.information(
+                            self, "Succès", 
+                            f"Étiquette matière première générée avec succès!\n\n"
+                            f"Fichier sauvegardé: {pdf_path.name}"
+                        )
+                        
+                        # Optionally open the reports folder
+                        import subprocess
+                        import platform
+                        
+                        reports_dir = pdf_path.parent
+                        if platform.system() == "Linux":
+                            subprocess.run(["xdg-open", str(reports_dir)])
+                        elif platform.system() == "Windows":
+                            subprocess.run(f'explorer "{reports_dir}"', shell=True)
+                        elif platform.system() == "Darwin":  # macOS
+                            subprocess.run(["open", str(reports_dir)])
+                    else:
+                        QMessageBox.warning(self, "Erreur", "Impossible de générer l'étiquette PDF.")
+                        
+                except Exception as e:
+                    print(f"Error generating raw material label: {e}")
+                    QMessageBox.critical(self, "Erreur", f"Erreur lors de la génération de l'étiquette: {str(e)}")
+            
+        except Exception as e:
+            print(f"Error printing raw material label: {e}")
+            QMessageBox.critical(self, "Erreur", f"Erreur lors de l'impression de l'étiquette: {str(e)}")
 
 
 __all__ = ['MainWindow']
