@@ -4,14 +4,14 @@ Dialog for adding finished products by selecting raw materials from stock
 
 from __future__ import annotations
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
-                             QPushButton, QComboBox, QSpinBox, QTextEdit, 
+                             QPushButton, QComboBox, QSpinBox, QDateEdit, 
                              QLineEdit, QFormLayout, QGroupBox, QCheckBox)
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QDate
 from config.database import SessionLocal
 from models.orders import Reception, SupplierOrder, SupplierOrderLineItem
 from models.clients import Client
 from models.production import ProductionBatch
-from datetime import datetime, timezone
+from datetime import date
 
 
 class AddFinishedProductDialog(QDialog):
@@ -108,10 +108,10 @@ class AddFinishedProductDialog(QDialog):
         self.batch_code_edit.setPlaceholderText("Ex: PROD-2025-001")
         production_layout.addRow("Code du lot:", self.batch_code_edit)
         
-        self.notes_edit = QTextEdit()
-        self.notes_edit.setMaximumHeight(100)
-        self.notes_edit.setPlaceholderText("Notes sur la production (optionnel)")
-        production_layout.addRow("Notes:", self.notes_edit)
+        self.production_date_edit = QDateEdit()
+        self.production_date_edit.setCalendarPopup(True)
+        self.production_date_edit.setDate(QDate.currentDate())
+        production_layout.addRow("Date de production:", self.production_date_edit)
         
         layout.addWidget(production_group)
         
@@ -242,10 +242,39 @@ class AddFinishedProductDialog(QDialog):
         
         # Generate batch code suggestion
         if not self.batch_code_edit.text():
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+            from datetime import datetime
+            from models.production import ProductionBatch
+            import random
+            
+            # Create a unique batch code
+            session = SessionLocal()
             client_short = material_data['client_name'][:3].upper()
-            suggested_code = f"PROD_{client_short}_{timestamp}"
-            self.batch_code_edit.setText(suggested_code)
+            
+            try:
+                attempts = 0
+                max_attempts = 10
+                
+                while attempts < max_attempts:
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    random_suffix = random.randint(10, 99)
+                    suggested_code = f"PROD_{client_short}_{timestamp}_{random_suffix}"
+                    
+                    # Check if this batch code already exists
+                    existing = session.query(ProductionBatch).filter_by(batch_code=suggested_code).first()
+                    if not existing:
+                        self.batch_code_edit.setText(suggested_code)
+                        break
+                        
+                    attempts += 1
+                    
+                if attempts >= max_attempts:
+                    # Fallback to timestamp with milliseconds
+                    import time
+                    timestamp_ms = datetime.now().strftime("%Y%m%d_%H%M%S") + f"_{int(time.time() * 1000) % 1000:03d}"
+                    suggested_code = f"PROD_{client_short}_{timestamp_ms}"
+                    self.batch_code_edit.setText(suggested_code)
+            finally:
+                session.close()
     
     def _calculate_loss(self):
         """Calculate and display the loss (used quantity - produced quantity)"""
@@ -273,6 +302,7 @@ class AddFinishedProductDialog(QDialog):
         self.available_qty_edit.clear()
         self.order_ref_edit.clear()
         self.batch_code_edit.clear()
+        self.production_date_edit.setDate(QDate.currentDate())
     
     def _on_use_all_toggled(self, checked):
         """Handle use all quantity checkbox"""
@@ -296,7 +326,7 @@ class AddFinishedProductDialog(QDialog):
             'loss': self.quantity_spin.value() - self.produced_qty_spin.value(),
             'use_all': self.use_all_checkbox.isChecked(),
             'batch_code': self.batch_code_edit.text().strip(),
-            'notes': self.notes_edit.toPlainText().strip()
+            'production_date': self.production_date_edit.date().toString('yyyy-MM-dd')
         }
     
     def accept(self):

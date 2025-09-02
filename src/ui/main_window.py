@@ -14,7 +14,7 @@ from models.suppliers import Supplier
 from models.clients import Client
 from models.orders import ClientOrder, SupplierOrder
 from models.orders import SupplierOrderStatus, ClientOrderStatus, Reception, Quotation
-from models.production import ProductionBatch, ProductionStage
+from models.production import ProductionBatch
 from ui.dialogs.supplier_dialog import SupplierDialog
 from ui.dialogs.client_dialog import ClientDialog
 from ui.dialogs.supplier_detail_dialog import SupplierDetailDialog
@@ -2108,13 +2108,10 @@ class MainWindow(QMainWindow):
                                 caisse_dims = f"{line_item.caisse_length_mm}×{line_item.caisse_width_mm}×{line_item.caisse_height_mm}"
                                 material_type = line_item.cardboard_type or "Standard"
                     
-                    # Map stage to French text
-                    status_map = {
-                        ProductionStage.CUT_PRINT: "Découpe/Impression",
-                        ProductionStage.GLUE_ECLIPSAGE: "Collage/Éclipsage", 
-                        ProductionStage.COMPLETE: "Terminé"
-                    }
-                    status = status_map.get(pb.stage, "Inconnu")
+                    # Format production date
+                    production_date = "N/A"
+                    if hasattr(pb, 'production_date') and pb.production_date:
+                        production_date = pb.production_date.strftime('%Y-%m-%d')
                     
                     production_data.append([
                         str(pb.id),
@@ -2123,8 +2120,8 @@ class MainWindow(QMainWindow):
                         plaque_dims,
                         caisse_dims,
                         material_type,
-                        str(pb.produced_quantity or 0),
-                        status
+                        str(getattr(pb, 'quantity', 0) or 0),
+                        production_date
                     ])
                     
                 except Exception as e:
@@ -2136,7 +2133,7 @@ class MainWindow(QMainWindow):
                         "N/A",
                         "N/A", 
                         "N/A",
-                        str(pb.produced_quantity or 0),
+                        str(getattr(pb, 'quantity', 0) or 0),
                         "N/A"
                     ])
             
@@ -2928,7 +2925,7 @@ Détails individuels:"""
     def _add_finished_product(self):
         """Add a new finished product from raw materials"""
         from ui.dialogs.add_finished_product_dialog import AddFinishedProductDialog
-        from models.production import ProductionBatch, ProductionStage
+        from models.production import ProductionBatch
         
         dialog = AddFinishedProductDialog(self)
         if dialog.exec():
@@ -2966,35 +2963,71 @@ Détails individuels:"""
                     session.flush()  # Get the ID
                     client_order_id = client_order.id
                 
+                # Parse production date
+                from datetime import datetime as dt
+                production_date = None
+                if data.get('production_date'):
+                    try:
+                        production_date = dt.strptime(data['production_date'], '%Y-%m-%d').date()
+                    except:
+                        production_date = dt.now().date()
+                else:
+                    production_date = dt.now().date()
+                
                 production_batch = ProductionBatch(
                     client_order_id=client_order_id,
                     batch_code=data['batch_code'],
-                    stage=ProductionStage.COMPLETE,
-                    produced_quantity=data['quantity_used'],
-                    waste_quantity=0,
-                    notes=data['notes'],
-                    started_at=datetime.datetime.now(timezone.utc),
-                    completed_at=datetime.datetime.now(timezone.utc)
+                    quantity=data['quantity_produced'],  # Store produced quantity, not used quantity
+                    production_date=production_date
                 )
                 
                 session.add(production_batch)
                 
                 # Update raw material quantities
                 quantity_remaining = data['quantity_used']
-                for reception in material_data['receptions']:
+                receptions_list = material_data['receptions']
+                
+                print(f"DEBUG: Starting stock deduction for {quantity_remaining} units")
+                print(f"DEBUG: Available receptions: {len(receptions_list)}")
+                
+                # Re-query reception objects in current session to avoid detached instance errors
+                reception_ids = [r.id for r in receptions_list]
+                current_receptions = session.query(Reception).filter(Reception.id.in_(reception_ids)).order_by(Reception.id).all()
+                
+                print(f"DEBUG: Re-queried {len(current_receptions)} receptions in current session")
+                
+                for i, reception in enumerate(current_receptions):
+                    print(f"DEBUG: Reception {i+1}: ID={reception.id}, Quantity={reception.quantity}")
                     if quantity_remaining <= 0:
                         break
                         
                     if reception.quantity <= quantity_remaining:
                         # Use entire reception
+                        print(f"DEBUG: Deleting entire reception {reception.id} (quantity: {reception.quantity})")
                         quantity_remaining -= reception.quantity
                         session.delete(reception)
                     else:
                         # Use partial reception
+                        old_qty = reception.quantity
                         reception.quantity -= quantity_remaining
+                        print(f"DEBUG: Reducing reception {reception.id} from {old_qty} to {reception.quantity}")
                         quantity_remaining = 0
                 
+                print(f"DEBUG: Stock deduction complete, remaining: {quantity_remaining}")
+                
+                print(f"DEBUG: About to commit transaction...")
                 session.commit()
+                print(f"DEBUG: Transaction committed successfully")
+                
+                # Verify the changes were saved by re-querying
+                print(f"DEBUG: Verifying changes in database...")
+                for reception in current_receptions:
+                    session.refresh(reception)
+                    print(f"DEBUG: Reception {reception.id} quantity after commit: {reception.quantity}")
+                
+                # Clear any cached objects to ensure fresh data
+                session.expunge_all()
+                print(f"DEBUG: Session expunged")
                 
                 QMessageBox.information(
                     self, 

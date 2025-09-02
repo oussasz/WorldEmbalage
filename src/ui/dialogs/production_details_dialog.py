@@ -3,11 +3,10 @@ Dialog for viewing and editing production batch details
 """
 from __future__ import annotations
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, 
-                             QLineEdit, QLabel, QPushButton, QComboBox, QSpinBox, 
-                             QTextEdit, QDateEdit, QCheckBox, QGroupBox, QMessageBox)
+                             QLineEdit, QLabel, QPushButton, QDateEdit, QGroupBox, QMessageBox, QSpinBox)
 from PyQt6.QtCore import Qt, QDate
 from PyQt6.QtGui import QFont
-from models.production import ProductionBatch, ProductionStage
+from models.production import ProductionBatch
 from models.orders import ClientOrder
 from typing import Dict, Any, Optional
 
@@ -20,7 +19,7 @@ class ProductionDetailsDialog(QDialog):
         self.production_batch = production_batch
         self.editable = editable
         self.setWindowTitle('Détails de Production' if not editable else 'Modifier Production')
-        self.setMinimumSize(600, 500)
+        self.setMinimumSize(600, 400)
         self._setup_ui()
         self._load_data()
         
@@ -56,7 +55,7 @@ class ProductionDetailsDialog(QDialog):
         
         layout.addWidget(general_group)
         
-        # Raw Material Information Group (same as Add dialog)
+        # Raw Material Information Group
         material_group = QGroupBox("Informations de la Matière Première")
         material_layout = QFormLayout(material_group)
         
@@ -72,57 +71,26 @@ class ProductionDetailsDialog(QDialog):
         self.material_type_label = QLabel()
         material_layout.addRow("Type de carton:", self.material_type_label)
         
-        self.used_quantity_label = QLabel()
-        material_layout.addRow("Quantité utilisée:", self.used_quantity_label)
-        
         self.supplier_order_ref_label = QLabel()
         material_layout.addRow("Référence commande fournisseur:", self.supplier_order_ref_label)
         
         layout.addWidget(material_group)
         
-        # Production Stage and Details
+        # Production Details
         production_group = QGroupBox("Détails de Production")
         production_layout = QFormLayout(production_group)
         
-        # Production Stage
-        self.stage_combo = QComboBox()
-        self.stage_combo.addItems([
-            "Découpe/Impression",
-            "Collage/Éclipsage", 
-            "Terminé"
-        ])
-        self.stage_combo.setEnabled(self.editable)
-        production_layout.addRow("Étape de production:", self.stage_combo)
+        # Quantity
+        self.quantity_spin = QSpinBox()
+        self.quantity_spin.setRange(0, 999999)
+        self.quantity_spin.setReadOnly(not self.editable)
+        production_layout.addRow("Quantité produite:", self.quantity_spin)
         
-        # Produced Quantity
-        self.produced_qty_spin = QSpinBox()
-        self.produced_qty_spin.setRange(0, 999999)
-        self.produced_qty_spin.setReadOnly(not self.editable)
-        production_layout.addRow("Quantité produite:", self.produced_qty_spin)
-        
-        # Waste Quantity
-        self.waste_qty_spin = QSpinBox()
-        self.waste_qty_spin.setRange(0, 999999)
-        self.waste_qty_spin.setReadOnly(not self.editable)
-        production_layout.addRow("Quantité de déchet:", self.waste_qty_spin)
-        
-        # Started Date
-        self.started_date_edit = QDateEdit()
-        self.started_date_edit.setCalendarPopup(True)
-        self.started_date_edit.setEnabled(self.editable)
-        production_layout.addRow("Date de début:", self.started_date_edit)
-        
-        # Completed Date
-        self.completed_date_edit = QDateEdit()
-        self.completed_date_edit.setCalendarPopup(True)
-        self.completed_date_edit.setEnabled(self.editable)
-        production_layout.addRow("Date d'achèvement:", self.completed_date_edit)
-        
-        # Notes
-        self.notes_edit = QTextEdit()
-        self.notes_edit.setMaximumHeight(100)
-        self.notes_edit.setReadOnly(not self.editable)
-        production_layout.addRow("Remarques:", self.notes_edit)
+        # Production Date
+        self.production_date_edit = QDateEdit()
+        self.production_date_edit.setCalendarPopup(True)
+        self.production_date_edit.setEnabled(self.editable)
+        production_layout.addRow("Date de production:", self.production_date_edit)
         
         layout.addWidget(production_group)
         
@@ -213,68 +181,19 @@ class ProductionDetailsDialog(QDialog):
                             # Material type
                             self.material_type_label.setText(line_item.cardboard_type or "Standard")
                             
-                            # Used quantity (from production batch)
-                            used_qty = getattr(self.production_batch, 'produced_quantity', 0) or 0
-                            self.used_quantity_label.setText(f"{used_qty} pièces")
-                            
                             # Supplier order reference
                             self.supplier_order_ref_label.setText(supplier_order.bon_commande_ref or "N/A")
                         else:
                             # No supplier order found, set defaults
-                            self.material_client_label.setText("N/A")
-                            self.plaque_dimensions_label.setText("N/A")
-                            self.caisse_dimensions_label.setText("N/A") 
-                            self.material_type_label.setText("N/A")
-                            self.used_quantity_label.setText("N/A")
-                            self.supplier_order_ref_label.setText("N/A")
-                    else:
-                        # No supplier order ID in client order
-                        self.material_client_label.setText("N/A")
-                        self.plaque_dimensions_label.setText("N/A")
-                        self.caisse_dimensions_label.setText("N/A") 
-                        self.material_type_label.setText("N/A")
-                        self.used_quantity_label.setText("N/A")
-                        self.supplier_order_ref_label.setText("N/A")
-                else:
-                    # Client order not found - try alternative approach using batch code pattern matching
-                    self.client_order_label.setText("N/A")
-                    self.client_info_label.setText("N/A")
-                    
-                    # Try to extract information from batch code pattern: PROD_KOU_20250831_2359
-                    # This suggests it might be linked to Kouscous Elhadja
-                    if hasattr(self.production_batch, 'batch_code') and 'KOU' in self.production_batch.batch_code:
-                        # Look for recent supplier orders that might match this client
-                        supplier_orders = session.query(SupplierOrder).join(SupplierOrderLineItem).filter(
-                            SupplierOrderLineItem.client_id.isnot(None)
-                        ).all()
-                        
-                        # For now, use the first available supplier order with line items as fallback
-                        fallback_supplier_order = None
-                        for so in supplier_orders:
-                            if so.line_items:
-                                fallback_supplier_order = so
-                                break
-                        
-                        if fallback_supplier_order and fallback_supplier_order.line_items:
-                            line_item = fallback_supplier_order.line_items[0]
-                            self.material_client_label.setText(f"{line_item.client.name or 'N/A'} (estimé)")
-                            
-                            plaque_dims = f"{line_item.plaque_width_mm} × {line_item.plaque_length_mm} × {line_item.plaque_flap_mm} mm"
-                            self.plaque_dimensions_label.setText(plaque_dims)
-                            
-                            caisse_dims = f"{line_item.caisse_length_mm} × {line_item.caisse_width_mm} × {line_item.caisse_height_mm} mm"
-                            self.caisse_dimensions_label.setText(caisse_dims)
-                            
-                            self.material_type_label.setText(line_item.cardboard_type or "Standard")
-                            
-                            used_qty = getattr(self.production_batch, 'produced_quantity', 0) or 0
-                            self.used_quantity_label.setText(f"{used_qty} pièces")
-                            
-                            self.supplier_order_ref_label.setText(f"{fallback_supplier_order.bon_commande_ref or 'N/A'} (estimé)")
-                        else:
                             self._set_material_info_na()
                     else:
+                        # No supplier order ID in client order
                         self._set_material_info_na()
+                else:
+                    # Client order not found
+                    self.client_order_label.setText("N/A")
+                    self.client_info_label.setText("N/A")
+                    self._set_material_info_na()
             except Exception as e:
                 print(f"Error loading client order data: {e}")
                 self.client_order_label.setText("Erreur de chargement")
@@ -286,45 +205,17 @@ class ProductionDetailsDialog(QDialog):
             self.client_order_label.setText("N/A")
             self.client_info_label.setText("N/A")
             self._set_material_info_na()
-    
-    def _set_material_info_na(self):
-        """Set all material information fields to N/A"""
-        self.material_client_label.setText("N/A")
-        self.plaque_dimensions_label.setText("N/A")
-        self.caisse_dimensions_label.setText("N/A")
-        self.material_type_label.setText("N/A")
-        self.used_quantity_label.setText("N/A")
-        self.supplier_order_ref_label.setText("N/A")
-        
-        # Production stage
-        stage_map = {
-            ProductionStage.CUT_PRINT: 0,
-            ProductionStage.GLUE_ECLIPSAGE: 1,
-            ProductionStage.COMPLETE: 2
-        }
-        self.stage_combo.setCurrentIndex(stage_map.get(self.production_batch.stage, 0))
-        
-        # Production details
-        self.produced_qty_spin.setValue(self.production_batch.produced_quantity or 0)
-        self.waste_qty_spin.setValue(self.production_batch.waste_quantity or 0)
-        
-        # Dates
-        if self.production_batch.started_at:
-            self.started_date_edit.setDate(QDate.fromString(
-                self.production_batch.started_at.strftime('%Y-%m-%d'), 'yyyy-MM-dd'
-            ))
-        else:
-            self.started_date_edit.setDate(QDate.currentDate())
             
-        if self.production_batch.completed_at:
-            self.completed_date_edit.setDate(QDate.fromString(
-                self.production_batch.completed_at.strftime('%Y-%m-%d'), 'yyyy-MM-dd'
+        # Production details
+        self.quantity_spin.setValue(getattr(self.production_batch, 'quantity', 0) or 0)
+        
+        # Production date
+        if hasattr(self.production_batch, 'production_date') and self.production_batch.production_date:
+            self.production_date_edit.setDate(QDate.fromString(
+                self.production_batch.production_date.strftime('%Y-%m-%d'), 'yyyy-MM-dd'
             ))
         else:
-            self.completed_date_edit.setDate(QDate.currentDate())
-        
-        # Notes
-        self.notes_edit.setPlainText(self.production_batch.notes or "")
+            self.production_date_edit.setDate(QDate.currentDate())
         
         # System timestamps
         if hasattr(self.production_batch, 'created_at') and self.production_batch.created_at:
@@ -351,26 +242,23 @@ class ProductionDetailsDialog(QDialog):
         else:
             self.updated_at_label.setText("N/A")
     
+    def _set_material_info_na(self):
+        """Set all material information fields to N/A"""
+        self.material_client_label.setText("N/A")
+        self.plaque_dimensions_label.setText("N/A")
+        self.caisse_dimensions_label.setText("N/A")
+        self.material_type_label.setText("N/A")
+        self.supplier_order_ref_label.setText("N/A")
+    
     def get_production_data(self) -> Optional[Dict[str, Any]]:
         """Get the edited production data"""
         if not self.editable:
             return None
             
-        # Map combo box index to stage
-        stage_map = {
-            0: ProductionStage.CUT_PRINT,
-            1: ProductionStage.GLUE_ECLIPSAGE,
-            2: ProductionStage.COMPLETE
-        }
-        
         return {
             'batch_code': self.batch_code_edit.text().strip(),
-            'stage': stage_map[self.stage_combo.currentIndex()],
-            'produced_quantity': self.produced_qty_spin.value(),
-            'waste_quantity': self.waste_qty_spin.value(),
-            'notes': self.notes_edit.toPlainText().strip(),
-            'started_at': self.started_date_edit.date().toString('yyyy-MM-dd') if self.started_date_edit.date().isValid() else None,
-            'completed_at': self.completed_date_edit.date().toString('yyyy-MM-dd') if self.completed_date_edit.date().isValid() else None
+            'quantity': self.quantity_spin.value(),
+            'production_date': self.production_date_edit.date().toString('yyyy-MM-dd') if self.production_date_edit.date().isValid() else None
         }
 
 

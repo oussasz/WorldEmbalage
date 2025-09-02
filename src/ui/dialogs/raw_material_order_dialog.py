@@ -168,7 +168,7 @@ class RawMaterialOrderDialog(QDialog):
                 plaque_width = line_item.width_mm + line_item.length_mm
                 
                 # longueur de plaque = (largeur de carton + longueur de carton) * 2
-                plaque_length = (line_item.width_mm + line_item.length_mm) * 2
+                plaque_length = (line_item.width_mm + line_item.length_mm) * 2 + 3
                 
                 # Rabat = largeur de carton / 2
                 rabat = line_item.width_mm / 2

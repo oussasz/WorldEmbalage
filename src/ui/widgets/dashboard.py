@@ -424,7 +424,7 @@ class Dashboard(QWidget):
                 try:
                     self.activities_widget.add_activity(
                         "P", 
-                        f"Production lot {batch.batch_code} - {batch.stage.value}",
+                        f"Production lot {batch.batch_code} - {batch.production_date.strftime('%Y-%m-%d') if batch.production_date else 'N/A'}",
                         "Récent",
                         "#20C997"
                     )
