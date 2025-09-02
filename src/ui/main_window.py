@@ -275,8 +275,8 @@ class MainWindow(QMainWindow):
         
         # 4. Stock (Split view: Raw materials and Finished products)
         self.stock_split = SplitView(
-            "Matières Premières", ["ID", "Référence", "Quantité", "Fournisseur", "Bon Commande", "Client", "Date Réception"],
-            "Produits Finis", ["ID", "Code Lot", "Client", "Dimensions Plaque", "Dimensions Caisse", "Type Carton", "Quantité", "Statut"]
+            "Matières Premières", ["ID", "Quantité", "Fournisseur", "Bon Commande", "Client", "Date Réception"],
+            "Produits Finis", ["ID", "Client", "Dimensions Caisse", "Quantité", "Statut"]
         )
         # Add Raw Material Arrival button to the left side (Raw materials)
         self.stock_split.add_left_action_button("📦 Arrivée Matière Première", self._raw_material_arrival)
@@ -2064,7 +2064,6 @@ class MainWindow(QMainWindow):
             for group_key, group in grouped_receptions.items():
                 receptions_data.append([
                     ",".join(map(str, group['ids'])),  # Store all IDs for context menu
-                    group['reference'],  # Reference (merged)
                     str(group['quantity']),  # Quantity (summed)
                     group['supplier'],  # Supplier
                     group['bon_commande'],  # Bon Commande (merged)
@@ -2115,11 +2114,8 @@ class MainWindow(QMainWindow):
                     
                     production_data.append([
                         str(pb.id),
-                        pb.batch_code or "N/A",
                         client_name,
-                        plaque_dims,
                         caisse_dims,
-                        material_type,
                         str(getattr(pb, 'quantity', 0) or 0),
                         production_date
                     ])
@@ -2128,10 +2124,7 @@ class MainWindow(QMainWindow):
                     # Fallback data if there's an error loading details
                     production_data.append([
                         str(pb.id),
-                        pb.batch_code or "N/A",
                         "Erreur de chargement",
-                        "N/A",
-                        "N/A", 
                         "N/A",
                         str(getattr(pb, 'quantity', 0) or 0),
                         "N/A"

@@ -62,14 +62,8 @@ class ProductionDetailsDialog(QDialog):
         self.material_client_label = QLabel()
         material_layout.addRow("Client de la matière:", self.material_client_label)
         
-        self.plaque_dimensions_label = QLabel()
-        material_layout.addRow("Dimensions plaque:", self.plaque_dimensions_label)
-        
         self.caisse_dimensions_label = QLabel()
         material_layout.addRow("Dimensions caisse:", self.caisse_dimensions_label)
-        
-        self.material_type_label = QLabel()
-        material_layout.addRow("Type de carton:", self.material_type_label)
         
         self.supplier_order_ref_label = QLabel()
         material_layout.addRow("Référence commande fournisseur:", self.supplier_order_ref_label)
@@ -170,16 +164,9 @@ class ProductionDetailsDialog(QDialog):
                             else:
                                 self.material_client_label.setText("N/A")
                             
-                            # Plaque dimensions
-                            plaque_dims = f"{line_item.plaque_width_mm} × {line_item.plaque_length_mm} × {line_item.plaque_flap_mm} mm"
-                            self.plaque_dimensions_label.setText(plaque_dims)
-                            
                             # Caisse dimensions
                             caisse_dims = f"{line_item.caisse_length_mm} × {line_item.caisse_width_mm} × {line_item.caisse_height_mm} mm"
                             self.caisse_dimensions_label.setText(caisse_dims)
-                            
-                            # Material type
-                            self.material_type_label.setText(line_item.cardboard_type or "Standard")
                             
                             # Supplier order reference
                             self.supplier_order_ref_label.setText(supplier_order.bon_commande_ref or "N/A")
@@ -245,9 +232,7 @@ class ProductionDetailsDialog(QDialog):
     def _set_material_info_na(self):
         """Set all material information fields to N/A"""
         self.material_client_label.setText("N/A")
-        self.plaque_dimensions_label.setText("N/A")
         self.caisse_dimensions_label.setText("N/A")
-        self.material_type_label.setText("N/A")
         self.supplier_order_ref_label.setText("N/A")
     
     def get_production_data(self) -> Optional[Dict[str, Any]]:

@@ -48,7 +48,7 @@ class AddFinishedProductDialog(QDialog):
         
         self.quantity_spin = QSpinBox()
         self.quantity_spin.setRange(1, 9999)
-        self.quantity_spin.setSuffix(" pièces")
+        self.quantity_spin.setSuffix(" plaques")
         self.quantity_spin.valueChanged.connect(self._calculate_loss)
         quantity_layout.addWidget(QLabel("Quantité:"))
         quantity_layout.addWidget(self.quantity_spin)
@@ -58,7 +58,7 @@ class AddFinishedProductDialog(QDialog):
         # Produced quantity field (right below used quantity)
         self.produced_qty_spin = QSpinBox()
         self.produced_qty_spin.setRange(0, 9999)
-        self.produced_qty_spin.setSuffix(" pièces")
+        self.produced_qty_spin.setSuffix(" caisses")
         self.produced_qty_spin.valueChanged.connect(self._calculate_loss)
         material_layout.addRow("Quantité produite:", self.produced_qty_spin)
         
@@ -284,13 +284,13 @@ class AddFinishedProductDialog(QDialog):
         
         # Format the loss display
         if loss > 0:
-            self.loss_edit.setText(f"{loss} pièces")
+            self.loss_edit.setText(f"{loss} plaques")
             self.loss_edit.setStyleSheet("background-color: #ffe6e6; color: #d63031;")  # Light red for loss
         elif loss == 0:
-            self.loss_edit.setText(f"{loss} pièces")
+            self.loss_edit.setText(f"{loss} plaques")
             self.loss_edit.setStyleSheet("background-color: #e6ffe6; color: #00b894;")  # Light green for no loss
         else:
-            self.loss_edit.setText(f"{abs(loss)} pièces (surplus)")
+            self.loss_edit.setText(f"{abs(loss)} plaques (surplus)")
             self.loss_edit.setStyleSheet("background-color: #e6f3ff; color: #0984e3;")  # Light blue for surplus
     
     def _clear_material_info(self):
