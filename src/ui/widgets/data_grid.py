@@ -316,11 +316,7 @@ class DataGrid(QWidget):
         
         menu = QMenu(self)
         
-        # First emit signal to allow parent to add dynamic actions
-        if hasattr(self, 'contextMenuAboutToShow'):
-            self.contextMenuAboutToShow.emit(row, row_data, menu)
-        
-        # Add static context actions
+        # Add static context actions first
         for action_name, label, icon in self._context_actions:
             action = QAction(label, self)
             if icon:
@@ -329,6 +325,10 @@ class DataGrid(QWidget):
             action.triggered.connect(lambda checked, name=action_name: 
                                    self.contextMenuActionTriggered.emit(name, row, row_data))
             menu.addAction(action)
+        
+        # Then emit signal to allow parent to customize menu
+        if hasattr(self, 'contextMenuAboutToShow'):
+            self.contextMenuAboutToShow.emit(row, row_data, menu)
         
         menu.exec(self.table.mapToGlobal(position))
 

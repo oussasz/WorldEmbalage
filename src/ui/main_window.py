@@ -203,6 +203,11 @@ class MainWindow(QMainWindow):
             stock_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(4))
             data_menu.addAction(stock_action)
 
+            archive_action = QAction('&Archive', self)
+            archive_action.setIcon(IconManager.get_archive_icon())
+            archive_action.triggered.connect(lambda: self.tab_widget.setCurrentIndex(5))
+            data_menu.addAction(archive_action)
+
     def _create_toolbar(self) -> None:
         """Create the main toolbar."""
         from ui.styles import IconManager
@@ -287,6 +292,11 @@ class MainWindow(QMainWindow):
         self.receptions_grid = self.stock_split.left_grid  # Raw materials
         self.production_grid = self.stock_split.right_grid  # Finished products
         
+        # 6. Archive
+        from ui.widgets.archive_widget import ArchiveWidget
+        self.archive_widget = ArchiveWidget()
+        self.tab_widget.addTab(self.archive_widget, IconManager.get_archive_icon(), "Archive")
+        
         # Setup context menus after all grids are created
         self._setup_context_menus()
 
@@ -370,12 +380,15 @@ class MainWindow(QMainWindow):
             self.production_grid.add_context_action("edit", "✏️ Modifier production")
             self.production_grid.add_context_action("delete", "🗑️ Supprimer production")
             self.production_grid.add_context_action("print_fiche", "🖨️ Imprimer la fiche de produit fini")
+            self.production_grid.add_context_action("print_delivery", "📋 Imprimer le bon de livraison")
+            self.production_grid.add_context_action("print_invoice", "💰 Imprimer la facture")
             
             # Add "Add finished product" button to production grid
             self.production_grid.add_action_button("➕ Ajouter Produit Fini", self._add_finished_product)
             
             # Connect production context menu signals
             self.production_grid.contextMenuActionTriggered.connect(self._handle_production_context_menu)
+            self.production_grid.contextMenuAboutToShow.connect(self._customize_production_context_menu)
             self.production_grid.rowDoubleClicked.connect(self._on_production_double_click)
 
     def _customize_orders_context_menu(self, row: int, row_data: list, menu):
@@ -450,6 +463,79 @@ class MainWindow(QMainWindow):
                 create_order_action.setVisible(True)
         elif create_order_action:
             create_order_action.setVisible(False)
+
+    def _customize_production_context_menu(self, row: int, row_data: list, menu):
+        """Customize context menu for finished products based on selection"""
+        from PyQt6.QtGui import QAction
+        
+        if not self.production_grid or not hasattr(self.production_grid, 'get_selected_row_indices'):
+            return
+            
+        selected_rows = self.production_grid.get_selected_row_indices()
+        num_selected = len(selected_rows)
+        
+        if num_selected > 1:
+            # Multiple selection: only show Delete, Delivery, Invoice
+            
+            # Hide edit and print fiche actions for multiple selection
+            for action in menu.actions():
+                action_text = action.text()
+                if ("Modifier production" in action_text or 
+                    "Imprimer la fiche de produit fini" in action_text):
+                    action.setVisible(False)
+                elif "Supprimer production" in action_text and not action_text.startswith("Supprimer les"):
+                    action.setVisible(False)  # Hide single delete
+            
+            # Add or update multi-delete action
+            multi_delete_action = None
+            for action in menu.actions():
+                if action.text().startswith("🗑️ Supprimer les"):
+                    multi_delete_action = action
+                    break
+            
+            if not multi_delete_action:
+                multi_delete_action = QAction(f"🗑️ Supprimer les {num_selected} productions", self)
+                multi_delete_action.triggered.connect(lambda: self._handle_production_context_menu("multi_delete", -1, []))
+                menu.addAction(multi_delete_action)
+            else:
+                multi_delete_action.setText(f"🗑️ Supprimer les {num_selected} productions")
+                multi_delete_action.setVisible(True)
+                
+            # Keep delivery and invoice actions visible but update text
+            for action in menu.actions():
+                action_text = action.text()
+                if "bon de livraison" in action_text.lower():
+                    action.setText("📋 Imprimer le bon de livraison")
+                    action.setVisible(True)
+                elif "facture" in action_text.lower():
+                    action.setText("💰 Imprimer la facture")
+                    action.setVisible(True)
+                
+        else:
+            # Single selection: show all actions
+            
+            # Show all single-item actions
+            for action in menu.actions():
+                action_text = action.text()
+                if ("Modifier production" in action_text or 
+                    "Imprimer la fiche de produit fini" in action_text or
+                    ("Supprimer production" in action_text and not action_text.startswith("Supprimer les"))):
+                    action.setVisible(True)
+            
+            # Hide multi-delete action
+            for action in menu.actions():
+                if action.text().startswith("🗑️ Supprimer les"):
+                    action.setVisible(False)
+                    
+            # Reset delivery and invoice action text for single item
+            for action in menu.actions():
+                action_text = action.text()
+                if "bon de livraison" in action_text.lower():
+                    action.setText("📋 Imprimer le bon de livraison")
+                    action.setVisible(True)
+                elif "facture" in action_text.lower():
+                    action.setText("💰 Imprimer la facture")
+                    action.setVisible(True)
 
     def _on_quotation_double_click(self, row: int):
         """Handle double-click on quotation row to show detailed view"""
@@ -2077,7 +2163,9 @@ class MainWindow(QMainWindow):
             
             # Refresh stock - Finished products (production) on right side
             production_batches = session.query(ProductionBatch).all()
-            production_data = []
+            
+            # Use a dictionary to group items by client and dimensions
+            grouped_items = {}
             
             for pb in production_batches:
                 try:
@@ -2114,23 +2202,68 @@ class MainWindow(QMainWindow):
                     if hasattr(pb, 'production_date') and pb.production_date:
                         production_date = pb.production_date.strftime('%Y-%m-%d')
                     
-                    production_data.append([
-                        str(pb.id),
-                        client_name,
-                        caisse_dims,
-                        str(getattr(pb, 'quantity', 0) or 0),
-                        production_date
-                    ])
+                    # Create grouping key based on client and dimensions
+                    group_key = (client_name, caisse_dims)
+                    
+                    # Initialize group if it doesn't exist
+                    if group_key not in grouped_items:
+                        grouped_items[group_key] = {
+                            'ids': [],
+                            'client_name': client_name,
+                            'dimensions': caisse_dims,
+                            'total_quantity': 0,
+                            'production_dates': []
+                        }
+                    
+                    # Add to grouped items
+                    group_item = grouped_items[group_key]
+                    group_item['ids'].append(str(pb.id))
+                    group_item['total_quantity'] += int(getattr(pb, 'quantity', 0) or 0)
+                    if production_date != "N/A":
+                        group_item['production_dates'].append(production_date)
                     
                 except Exception as e:
                     # Fallback data if there's an error loading details
-                    production_data.append([
-                        str(pb.id),
-                        "Erreur de chargement",
-                        "N/A",
-                        str(getattr(pb, 'quantity', 0) or 0),
-                        "N/A"
-                    ])
+                    group_key = (f"Erreur {pb.id}", "N/A")
+                    if group_key not in grouped_items:
+                        grouped_items[group_key] = {
+                            'ids': [],
+                            'client_name': "Erreur de chargement",
+                            'dimensions': "N/A",
+                            'total_quantity': 0,
+                            'production_dates': []
+                        }
+                    
+                    group_item = grouped_items[group_key]
+                    group_item['ids'].append(str(pb.id))
+                    group_item['total_quantity'] += int(getattr(pb, 'quantity', 0) or 0)
+            
+            # Convert grouped items to display format
+            production_data = []
+            for group_key, group_data in grouped_items.items():
+                # If multiple IDs, show as range or list
+                if len(group_data['ids']) == 1:
+                    id_display = group_data['ids'][0]
+                else:
+                    # Convert string IDs to integers for min/max calculation
+                    id_numbers = [int(id_str) for id_str in group_data['ids'] if id_str.isdigit()]
+                    if id_numbers:
+                        id_display = f"{min(id_numbers)}-{max(id_numbers)} ({len(group_data['ids'])})"
+                    else:
+                        id_display = f"Multi ({len(group_data['ids'])})"
+                
+                # Use most recent production date if multiple
+                production_date = "N/A"
+                if group_data['production_dates']:
+                    production_date = max(group_data['production_dates'])
+                
+                production_data.append([
+                    id_display,
+                    group_data['client_name'],
+                    group_data['dimensions'],
+                    str(group_data['total_quantity']),
+                    production_date
+                ])
             
             self.stock_split.load_right_data(production_data)
             
@@ -2544,8 +2677,14 @@ class MainWindow(QMainWindow):
             self._edit_production(row_data)
         elif action_name == "delete":
             self._delete_production(row_data)
+        elif action_name == "multi_delete":
+            self._delete_multiple_productions()
         elif action_name == "print_fiche":
             self._print_finished_product_fiche(row_data)
+        elif action_name == "print_delivery":
+            self._print_delivery_note_for_selection()
+        elif action_name == "print_invoice":
+            self._print_invoice_for_selection()
 
     def _on_production_double_click(self, row: int):
         """Handle double-click on production item (finished products)"""
@@ -3045,8 +3184,28 @@ Détails individuels:"""
                 session.close()
 
     def _edit_production(self, row_data: list):
-        """Edit a production record"""
-        production_id = int(row_data[0])
+        """Edit a production record (not available for merged items)"""
+        import re
+        id_field = row_data[0]
+        
+        # Check if it's a merged format
+        if re.match(r'^\d+-\d+ \(\d+\)$', id_field):
+            QMessageBox.information(
+                self, 
+                "Modification non disponible", 
+                "La modification n'est pas disponible pour les éléments groupés.\n\n"
+                "Cette ligne représente plusieurs lots de production fusionnés. "
+                "Pour modifier un lot spécifique, veuillez d'abord désactiver le groupage "
+                "ou utiliser une vue détaillée."
+            )
+            return
+        
+        # Single item - proceed with edit
+        if not id_field.isdigit():
+            QMessageBox.warning(self, "Erreur", "ID de production invalide.")
+            return
+            
+        production_id = int(id_field)
         
         session = SessionLocal()
         try:
@@ -3070,9 +3229,43 @@ Détails individuels:"""
             session.close()
 
     def _delete_production(self, row_data: list):
-        """Delete a production record"""
-        production_id = int(row_data[0])
-        production_ref = row_data[1]  # Reference column
+        """Delete a production record (with special handling for merged items)"""
+        import re
+        id_field = row_data[0]
+        
+        # Check if it's a merged format
+        if re.match(r'^\d+-\d+ \(\d+\)$', id_field):
+            # Extract all IDs from merged format
+            range_match = re.match(r'^(\d+)-(\d+) \((\d+)\)$', id_field)
+            if range_match:
+                start_id = int(range_match.group(1))
+                end_id = int(range_match.group(2))
+                batch_ids = list(range(start_id, end_id + 1))
+                count = int(range_match.group(3))
+                
+                reply = QMessageBox.question(
+                    self,
+                    "Supprimer les lots groupés",
+                    f"Voulez-vous supprimer tous les {count} lots de production groupés ?\n\n"
+                    f"IDs concernés : {', '.join(map(str, batch_ids))}\n"
+                    f"Client : {row_data[1] if len(row_data) > 1 else 'N/A'}\n"
+                    f"Quantité totale : {row_data[3] if len(row_data) > 3 else 'N/A'}\n\n"
+                    f"Cette action est irréversible.",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                
+                if reply == QMessageBox.StandardButton.Yes:
+                    self._delete_multiple_production_ids(batch_ids)
+            return
+        
+        # Single item - proceed with normal delete
+        if not id_field.isdigit():
+            QMessageBox.warning(self, "Erreur", "ID de production invalide.")
+            return
+            
+        production_id = int(id_field)
+        production_ref = row_data[1] if len(row_data) > 1 else f"ID {production_id}"
         
         reply = QMessageBox.question(
             self, 
@@ -3104,9 +3297,67 @@ Détails individuels:"""
             finally:
                 session.close()
 
+    def _delete_multiple_production_ids(self, batch_ids: list[int]):
+        """Delete multiple production batches by their IDs"""
+        session = SessionLocal()
+        try:
+            deleted_count = 0
+            errors = []
+            
+            for batch_id in batch_ids:
+                try:
+                    production_batch = session.query(ProductionBatch).filter(
+                        ProductionBatch.id == batch_id
+                    ).first()
+                    
+                    if production_batch:
+                        session.delete(production_batch)
+                        deleted_count += 1
+                    else:
+                        errors.append(f"Lot {batch_id} non trouvé")
+                        
+                except Exception as e:
+                    errors.append(f"Lot {batch_id}: {str(e)}")
+            
+            if deleted_count > 0:
+                session.commit()
+                message = f"{deleted_count} lot(s) de production supprimé(s) avec succès!"
+                if errors:
+                    message += f"\n\nErreurs : {'; '.join(errors[:3])}"  # Show first 3 errors
+                QMessageBox.information(self, "Suppression terminée", message)
+                self.refresh_all()
+            else:
+                session.rollback()
+                QMessageBox.warning(self, "Erreur", f"Aucun lot supprimé. Erreurs : {'; '.join(errors)}")
+                
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, "Erreur", f"Erreur lors de la suppression multiple: {str(e)}")
+        finally:
+            session.close()
+
     def _show_production_details(self, row_data: list):
-        """Show detailed information about a production"""
-        production_id = int(row_data[0])
+        """Show detailed information about a production (handles merged items)"""
+        import re
+        id_field = row_data[0]
+        
+        # Check if it's a merged format
+        if re.match(r'^\d+-\d+ \(\d+\)$', id_field):
+            QMessageBox.information(
+                self, 
+                "Détails non disponibles", 
+                "L'affichage des détails n'est pas disponible pour les éléments groupés.\n\n"
+                "Cette ligne représente plusieurs lots de production fusionnés. "
+                "Pour voir les détails d'un lot spécifique, veuillez d'abord désactiver "
+                "le groupage ou utiliser une vue détaillée."
+            )
+            return
+        
+        if not id_field.isdigit():
+            QMessageBox.warning(self, "Erreur", "ID de production invalide.")
+            return
+            
+        production_id = int(id_field)
         
         session = SessionLocal()
         try:
@@ -3136,25 +3387,41 @@ Détails individuels:"""
             print(f"Error refreshing stock data: {e}")
 
     def _print_finished_product_fiche(self, row_data: list):
-        """Handle printing finished product fiche with pallet options"""
+        """Handle printing finished product fiche with pallet options (supports merged items)"""
         try:
-            # Extract production batch ID from row data
-            # Assuming the first column contains the batch ID
+            # Extract production batch ID(s) from row data
             if not row_data or len(row_data) == 0:
                 QMessageBox.warning(self, "Erreur", "Aucune donnée de production sélectionnée.")
                 return
             
-            # Get batch ID and quantity from row data
-            # Column structure: ["ID", "Client", "Dimensions Caisse", "Quantité", "Statut"]
-            batch_id = int(row_data[0]) if row_data[0] else None
+            # Parse ID field - could be single ID or merged format like "1-3 (2)"
+            import re
+            id_field = row_data[0]
+            batch_ids = []
+            
+            # Check if it's a merged format like "1-3 (2)" or just a single ID
+            if re.match(r'^\d+-\d+ \(\d+\)$', id_field):
+                # Extract range from merged format
+                range_match = re.match(r'^(\d+)-(\d+) \((\d+)\)$', id_field)
+                if range_match:
+                    start_id = int(range_match.group(1))
+                    end_id = int(range_match.group(2))
+                    batch_ids = list(range(start_id, end_id + 1))
+                else:
+                    QMessageBox.warning(self, "Erreur", "Format d'ID invalide.")
+                    return
+            elif id_field.isdigit():
+                # Single ID
+                batch_ids = [int(id_field)]
+            else:
+                QMessageBox.warning(self, "Erreur", "ID de lot de production invalide.")
+                return
+            
+            # Get other info from row data
             client_name = row_data[1] if len(row_data) > 1 else ""
             dimensions = row_data[2] if len(row_data) > 2 else ""
             total_quantity = int(row_data[3]) if len(row_data) > 3 and row_data[3] else 0
             
-            if not batch_id:
-                QMessageBox.warning(self, "Erreur", "ID de lot de production invalide.")
-                return
-                
             if total_quantity <= 0:
                 QMessageBox.warning(self, "Erreur", "Quantité invalide.")
                 return
@@ -3177,8 +3444,10 @@ Détails individuels:"""
                 for quantity_per_pallet, num_copies in pallets:
                     for copy in range(num_copies):
                         try:
+                            # For merged items, use the first batch ID as representative
+                            representative_batch_id = batch_ids[0]
                             pdf_path = export_finished_product_fiche(
-                                batch_id, 
+                                representative_batch_id, 
                                 quantity_per_pallet, 
                                 copy_number, 
                                 total_copies,
@@ -3294,6 +3563,422 @@ Détails individuels:"""
         except Exception as e:
             print(f"Error printing raw material label: {e}")
             QMessageBox.critical(self, "Erreur", f"Erreur lors de l'impression de l'étiquette: {str(e)}")
+
+    def _print_delivery_note(self, row_data: list):
+        """Print delivery note for finished product (handles both single and merged items)"""
+        from PyQt6.QtWidgets import QMessageBox
+        from config.database import SessionLocal
+        from models.production import ProductionBatch
+        from models.orders import ClientOrder, Quotation
+        from models.clients import Client
+        from services.document_service import DocumentService
+        from utils.reference_generator import generate_delivery_reference
+        from datetime import date
+        from sqlalchemy.orm import joinedload
+        import subprocess
+        import platform
+        import re
+        
+        # Extract basic information from row data
+        if not row_data or len(row_data) == 0:
+            QMessageBox.warning(self, "Erreur", "Aucune donnée de production sélectionnée.")
+            return
+        
+        try:
+            # Parse ID field - could be single ID or merged format like "1-3 (2)"
+            id_field = row_data[0]
+            batch_ids = []
+            
+            # Check if it's a merged format like "1-3 (2)" or just a single ID
+            if re.match(r'^\d+-\d+ \(\d+\)$', id_field):
+                # Extract range from merged format
+                range_match = re.match(r'^(\d+)-(\d+) \((\d+)\)$', id_field)
+                if range_match:
+                    start_id = int(range_match.group(1))
+                    end_id = int(range_match.group(2))
+                    batch_ids = list(range(start_id, end_id + 1))
+                else:
+                    QMessageBox.warning(self, "Erreur", "Format d'ID invalide.")
+                    return
+            elif id_field.isdigit():
+                # Single ID
+                batch_ids = [int(id_field)]
+            else:
+                QMessageBox.warning(self, "Erreur", "ID de lot de production invalide.")
+                return
+                
+            session = SessionLocal()
+            try:
+                # Get all production batches for this merged item
+                batches = session.query(ProductionBatch).filter(
+                    ProductionBatch.id.in_(batch_ids)
+                ).all()
+                
+                if not batches:
+                    QMessageBox.warning(self, "Erreur", f"Lots de production {id_field} introuvables.")
+                    return
+                
+                # Since items are merged, they should all have the same client and dimensions
+                # Use the first batch to get client information
+                first_batch = batches[0]
+                
+                # Get client order with quotation and client data eagerly loaded
+                client_order = session.query(ClientOrder).options(
+                    joinedload(ClientOrder.quotation).joinedload(Quotation.line_items),
+                    joinedload(ClientOrder.supplier_order)
+                ).filter(ClientOrder.id == first_batch.client_order_id).first()
+                
+                if not client_order:
+                    QMessageBox.warning(self, "Erreur", "Commande client introuvable pour ce lot.")
+                    return
+                
+                # Calculate total quantity from all batches
+                total_quantity = sum(getattr(batch, 'quantity', 0) or 0 for batch in batches)
+                
+                # Get client details from the first batch's client order
+                client_details = None
+                if client_order.supplier_order and client_order.supplier_order.line_items:
+                    line_item = client_order.supplier_order.line_items[0]
+                    if line_item.client:
+                        client_details = {
+                            'name': line_item.client.name,
+                            'address': getattr(line_item.client, 'address', ''),
+                            'phone': getattr(line_item.client, 'phone', ''),
+                            'email': getattr(line_item.client, 'email', '')
+                        }
+                
+                # Create delivery item with merged data
+                delivery_items = [{
+                    'description': f"Cartons {row_data[2]}" if len(row_data) > 2 else "Cartons",
+                    'quantity': total_quantity,
+                    'unit_price': 0.0,  # Will be calculated if needed
+                    'batch_ids': batch_ids,
+                    'client_order_id': first_batch.client_order_id
+                }]
+                
+                # Generate delivery reference
+                delivery_ref = generate_delivery_reference()
+                
+                # Get today's date
+                delivery_date = date.today()
+                
+                # Generate PDF
+                doc_service = DocumentService()
+                pdf_path = doc_service.build_delivery_note(
+                    reference=delivery_ref,
+                    client_name=client_details['name'] if client_details else "Client inconnu",
+                    delivery_date=delivery_date,
+                    lines=[{
+                        'designation': item['description'],
+                        'dimensions': row_data[2] if len(row_data) > 2 else "N/A",
+                        'quantity': str(item['quantity'])
+                    } for item in delivery_items],
+                    client_details=f"{client_details['name']}\n{client_details.get('address', '')}" if client_details else ""
+                )
+                
+                if pdf_path:
+                    # Try to open the PDF
+                    try:
+                        if platform.system() == "Darwin":  # macOS
+                            subprocess.run(["open", pdf_path])
+                        elif platform.system() == "Windows":
+                            subprocess.run(["start", pdf_path], shell=True)
+                        else:  # Linux
+                            subprocess.run(["xdg-open", pdf_path])
+                        
+                        QMessageBox.information(self, "Succès", f"Bon de livraison généré: {delivery_ref}")
+                    except Exception as e:
+                        QMessageBox.information(self, "Succès", f"Bon de livraison généré: {delivery_ref}\nFichier: {pdf_path}")
+                else:
+                    QMessageBox.warning(self, "Erreur", "Impossible de générer le bon de livraison.")
+                    
+            finally:
+                session.close()
+                
+        except Exception as e:
+            print(f"Error generating delivery note: {e}")
+            QMessageBox.critical(self, "Erreur", f"Erreur lors de la génération du bon de livraison: {str(e)}")
+
+    def _print_invoice(self, row_data: list):
+        """Print invoice for finished product (placeholder)"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        # Extract basic information from row data
+        if not row_data or len(row_data) == 0:
+            QMessageBox.warning(self, "Erreur", "Aucune donnée de production sélectionnée.")
+            return
+        
+        batch_id = row_data[0] if row_data[0] else "N/A"
+        client_name = row_data[1] if len(row_data) > 1 else "N/A"
+        quantity = row_data[3] if len(row_data) > 3 else "N/A"
+        
+        # TODO: Implement invoice generation with unified reference
+        QMessageBox.information(
+            self, 
+            "Facture", 
+            f"Fonctionnalité en cours de développement.\n\n"
+            f"Lot: {batch_id}\n"
+            f"Client: {client_name}\n"
+            f"Quantité: {quantity}\n\n"
+            f"La facture sera générée avec référence unifiée prochainement."
+        )
+
+    def _delete_multiple_productions(self):
+        """Delete multiple selected productions"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        if not self.production_grid or not hasattr(self.production_grid, 'get_selected_rows_data'):
+            return
+            
+        selected_rows_data = self.production_grid.get_selected_rows_data()
+        if not selected_rows_data:
+            QMessageBox.warning(self, "Aucune sélection", "Aucune production sélectionnée.")
+            return
+
+        production_count = len(selected_rows_data)
+        batch_ids = [row[0] for row in selected_rows_data if len(row) > 0]
+        
+        # TODO: Implement multiple production deletion
+        QMessageBox.information(
+            self,
+            "Suppression multiple",
+            f"Fonctionnalité en cours de développement.\n\n"
+            f"{production_count} productions sélectionnées:\n"
+            f"IDs: {', '.join(batch_ids)}\n\n"
+            f"La suppression multiple sera implémentée prochainement."
+        )
+
+    def _print_delivery_note_for_selection(self):
+        """Print delivery notes for selected finished products"""
+        from PyQt6.QtWidgets import QMessageBox
+        from config.database import SessionLocal
+        from models.production import ProductionBatch
+        from models.orders import ClientOrder, Quotation
+        from models.clients import Client
+        from services.document_service import DocumentService
+        from utils.reference_generator import generate_delivery_reference
+        from datetime import date
+        from sqlalchemy.orm import joinedload
+        from collections import defaultdict
+        import subprocess
+        import platform
+        
+        if not self.production_grid or not hasattr(self.production_grid, 'get_selected_rows_data'):
+            # Fall back to single item if no multi-selection support
+            return
+            
+        selected_rows_data = self.production_grid.get_selected_rows_data()
+        if not selected_rows_data:
+            QMessageBox.warning(self, "Aucune sélection", "Aucune production sélectionnée.")
+            return
+
+        if len(selected_rows_data) == 1:
+            # Single selection - use existing method
+            self._print_delivery_note(selected_rows_data[0])
+        else:
+            # Multiple selection - Group by client and dimensions, then generate merged delivery notes
+            try:
+                session = SessionLocal()
+                try:
+                    # Group items by client to create separate delivery notes per client
+                    client_groups = defaultdict(list)
+                    
+                    for row_data in selected_rows_data:
+                        if not row_data or len(row_data) == 0:
+                            continue
+                            
+                        batch_id = int(row_data[0]) if row_data[0] and row_data[0].isdigit() else None
+                        if not batch_id:
+                            continue
+                            
+                        # Get production batch with related data
+                        batch = session.query(ProductionBatch).filter(
+                            ProductionBatch.id == batch_id
+                        ).first()
+                        
+                        if not batch:
+                            continue
+                        
+                        # Get client order with quotation and client data eagerly loaded
+                        client_order = session.query(ClientOrder).options(
+                            joinedload(ClientOrder.quotation).joinedload(Quotation.line_items),
+                            joinedload(ClientOrder.client)
+                        ).filter(
+                            ClientOrder.id == batch.client_order_id
+                        ).first()
+                        
+                        if not client_order or not client_order.client:
+                            continue
+                        
+                        client = client_order.client
+                        
+                        # Get dimensions from quotation if available
+                        box_dimensions = "N/A"
+                        if client_order.quotation and client_order.quotation.line_items:
+                            line_item = client_order.quotation.line_items[0]  # First item
+                            if line_item.length_mm and line_item.width_mm and line_item.height_mm:
+                                box_dimensions = f"{line_item.length_mm}×{line_item.width_mm}×{line_item.height_mm}"
+                        
+                        # Group by client ID
+                        client_groups[client.id].append({
+                            'client': client,
+                            'client_order': client_order,
+                            'batch': batch,
+                            'dimensions': box_dimensions,
+                            'designation': f"Caisse {client_order.reference}"
+                        })
+                    
+                    # Generate delivery note for each client group
+                    generated_count = 0
+                    errors = []
+                    
+                    for client_id, items in client_groups.items():
+                        try:
+                            client = items[0]['client']
+                            
+                            # Merge items with same dimensions
+                            merged_items = defaultdict(int)  # dimensions -> total_quantity
+                            designations = defaultdict(set)  # dimensions -> set of designations
+                            
+                            for item in items:
+                                dimensions = item['dimensions']
+                                quantity = item['batch'].quantity
+                                designation = item['designation']
+                                
+                                merged_items[dimensions] += quantity
+                                designations[dimensions].add(designation)
+                            
+                            # Generate unified reference
+                            delivery_reference = generate_delivery_reference()
+                            
+                            # Prepare client details block
+                            client_details = client.name
+                            if client.contact_name:
+                                client_details += f"\nContact: {client.contact_name}"
+                            if client.address:
+                                client_details += f"\n{client.address}"
+                            if client.city:
+                                client_details += f"\n{client.city}"
+                            if client.country:
+                                client_details += f"\n{client.country}"
+                            if client.phone:
+                                client_details += f"\nTél: {client.phone}"
+                            if client.email:
+                                client_details += f"\nEmail: {client.email}"
+                            
+                            # Prepare merged lines
+                            lines = []
+                            for dimensions, total_quantity in merged_items.items():
+                                # Use the first designation if multiple, or combine them
+                                designation_set = designations[dimensions]
+                                if len(designation_set) == 1:
+                                    designation = list(designation_set)[0]
+                                else:
+                                    # Multiple orders with same dimensions - create generic designation
+                                    designation = f"Caisses {dimensions}"
+                                
+                                lines.append({
+                                    'designation': designation,
+                                    'dimensions': dimensions,
+                                    'quantity': str(total_quantity)
+                                })
+                            
+                            # Generate PDF
+                            doc_service = DocumentService()
+                            pdf_path = doc_service.build_delivery_note(
+                                reference=delivery_reference,
+                                client_name=client.name,
+                                delivery_date=date.today(),
+                                lines=lines,
+                                client_details=client_details
+                            )
+                            
+                            # Open the PDF (only for the first one to avoid opening too many)
+                            if generated_count == 0:
+                                try:
+                                    if platform.system() == 'Darwin':  # macOS
+                                        subprocess.call(['open', str(pdf_path)])
+                                    elif platform.system() == 'Windows':  # Windows
+                                        subprocess.call(['start', str(pdf_path)], shell=True)
+                                    else:  # Linux
+                                        subprocess.call(['xdg-open', str(pdf_path)])
+                                except Exception:
+                                    pass  # Ignore PDF opening errors
+                            
+                            generated_count += 1
+                            
+                        except Exception as e:
+                            # Use client name if available, otherwise use client_id
+                            client_name = items[0]['client'].name if items and 'client' in items[0] and items[0]['client'] else f"Client ID {client_id}"
+                            errors.append(f"Client {client_name}: {str(e)}")
+                    
+                    # Show summary
+                    if errors:
+                        error_text = "\n".join(errors[:5])  # Show first 5 errors
+                        if len(errors) > 5:
+                            error_text += f"\n... et {len(errors) - 5} autres erreurs"
+                        
+                        QMessageBox.warning(
+                            self,
+                            "Génération partiellement réussie",
+                            f"{generated_count} bon(s) de livraison généré(s) avec succès.\n\n"
+                            f"Erreurs rencontrées:\n{error_text}"
+                        )
+                    else:
+                        total_items = len(selected_rows_data)
+                        merged_info = f"({total_items} éléments fusionnés par client et dimensions)"
+                        
+                        QMessageBox.information(
+                            self,
+                            "Génération réussie",
+                            f"{generated_count} bon(s) de livraison généré(s) avec succès!\n"
+                            f"{merged_info}"
+                        )
+                        
+                finally:
+                    session.close()
+                    
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Erreur",
+                    f"Erreur lors de la génération multiple: {str(e)}"
+                )
+
+    def _print_invoice_for_selection(self):
+        """Print invoices for selected finished products"""
+        from PyQt6.QtWidgets import QMessageBox
+        
+        if not self.production_grid or not hasattr(self.production_grid, 'get_selected_rows_data'):
+            # Fall back to single item if no multi-selection support
+            return
+            
+        selected_rows_data = self.production_grid.get_selected_rows_data()
+        if not selected_rows_data:
+            QMessageBox.warning(self, "Aucune sélection", "Aucune production sélectionnée.")
+            return
+
+        if len(selected_rows_data) == 1:
+            # Single selection - use existing method
+            self._print_invoice(selected_rows_data[0])
+        else:
+            # Multiple selection
+            production_count = len(selected_rows_data)
+            batch_ids = [row[0] for row in selected_rows_data if len(row) > 0]
+            clients = [row[1] for row in selected_rows_data if len(row) > 1]
+            total_quantity = sum(int(row[3]) if len(row) > 3 and row[3].isdigit() else 0 for row in selected_rows_data)
+            
+            # TODO: Implement multiple invoice generation
+            QMessageBox.information(
+                self,
+                "Factures multiples",
+                f"Fonctionnalité en cours de développement.\n\n"
+                f"{production_count} factures à générer:\n"
+                f"Lots: {', '.join(batch_ids)}\n"
+                f"Clients: {', '.join(set(clients))}\n"
+                f"Quantité totale: {total_quantity}\n\n"
+                f"La génération multiple sera implémentée prochainement."
+            )
 
 
 __all__ = ['MainWindow']

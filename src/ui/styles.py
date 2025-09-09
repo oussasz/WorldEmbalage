@@ -64,6 +64,10 @@ class IconManager:
     def get_refresh_icon() -> QIcon:
         return IconManager.create_text_icon("🔄")
 
+    @staticmethod
+    def get_archive_icon() -> QIcon:
+        return IconManager.create_text_icon("📁")
+
 
 class StyleManager:
     """Manages application styling and themes"""
