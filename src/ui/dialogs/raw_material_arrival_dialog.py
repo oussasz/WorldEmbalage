@@ -438,27 +438,43 @@ class RawMaterialArrivalDialog(QDialog):
                 for supplier_order_id in supplier_orders_used:
                     supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == supplier_order_id).first()
                     if supplier_order:
-                        # Check if all line items are complete or if any are partial
-                        all_complete = True
-                        any_partial = False
+                        # Check completion status of ALL line items
+                        total_line_items = len(supplier_order.line_items)
+                        completed_line_items = 0
+                        partially_received_line_items = 0
+                        
                         for line_item in supplier_order.line_items:
-                            if hasattr(line_item, 'delivery_status'):
-                                if line_item.delivery_status == DeliveryStatus.PARTIAL:
-                                    any_partial = True
-                                    all_complete = False
-                                elif line_item.delivery_status != DeliveryStatus.COMPLETE:
-                                    all_complete = False
+                            received_qty = getattr(line_item, 'total_received_quantity', 0) or 0
+                            ordered_qty = line_item.quantity
+                            
+                            if received_qty >= ordered_qty:
+                                # This line item is fully received
+                                completed_line_items += 1
+                                # Update delivery status if available
+                                if hasattr(line_item, 'delivery_status'):
+                                    line_item.delivery_status = DeliveryStatus.COMPLETE
+                            elif received_qty > 0:
+                                # This line item is partially received
+                                partially_received_line_items += 1
+                                # Update delivery status if available
+                                if hasattr(line_item, 'delivery_status'):
+                                    line_item.delivery_status = DeliveryStatus.PARTIAL
                             else:
-                                received_qty = line_item.total_received_quantity or 0
-                                if received_qty < line_item.quantity:
-                                    if received_qty > 0:
-                                        any_partial = True
-                                    all_complete = False
-                        if all_complete:
+                                # This line item hasn't been received yet
+                                if hasattr(line_item, 'delivery_status'):
+                                    line_item.delivery_status = DeliveryStatus.PENDING
+                        
+                        # Update supplier order status based on ALL line items
+                        if completed_line_items == total_line_items:
+                            # ALL line items are complete
                             supplier_order.status = SupplierOrderStatus.COMPLETED
-                        elif any_partial or any(getattr(li, 'total_received_quantity', 0) > 0 for li in supplier_order.line_items):
+                        elif completed_line_items > 0 or partially_received_line_items > 0:
+                            # Some line items are complete or partial, but not all are complete
                             supplier_order.status = SupplierOrderStatus.PARTIALLY_DELIVERED
+                        # If no line items have been received, keep the current status (usually ORDERED)
+                        
                         print(f"Updated supplier order {supplier_order_id} status to: {supplier_order.status.value}")
+                        print(f"  Line items: {completed_line_items}/{total_line_items} complete, {partially_received_line_items} partial")
 
                 # Create a single Reception per (supplier_order_id, dimensions)
                 for (supplier_order_id, w, h, r), qty in reception_aggregates.items():

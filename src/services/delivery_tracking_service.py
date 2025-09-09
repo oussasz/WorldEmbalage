@@ -129,18 +129,32 @@ class DeliveryTrackingService:
         partial_items = 0
         
         for item in line_items:
-            if hasattr(item, 'delivery_status'):
-                if item.delivery_status == DeliveryStatus.COMPLETE:
-                    complete_items += 1
-                elif item.delivery_status == DeliveryStatus.PARTIAL:
-                    partial_items += 1
+            received_qty = getattr(item, 'total_received_quantity', 0) or 0
+            ordered_qty = item.quantity
+            
+            if received_qty >= ordered_qty:
+                complete_items += 1
+                # Update delivery status if available
+                if hasattr(item, 'delivery_status'):
+                    item.delivery_status = DeliveryStatus.COMPLETE
+            elif received_qty > 0:
+                partial_items += 1
+                # Update delivery status if available
+                if hasattr(item, 'delivery_status'):
+                    item.delivery_status = DeliveryStatus.PARTIAL
+            else:
+                # No delivery yet
+                if hasattr(item, 'delivery_status'):
+                    item.delivery_status = DeliveryStatus.PENDING
         
-        # Update supplier order status
+        # Update supplier order status based on ALL line items
         if complete_items == total_items:
-            supplier_order.status = SupplierOrderStatus.RECEIVED
-        elif partial_items > 0 or complete_items > 0:
-            # Keep as ORDERED but could add a PARTIAL_RECEIVED status if needed
-            pass
+            # ALL line items are complete - use COMPLETED status
+            supplier_order.status = SupplierOrderStatus.COMPLETED
+        elif complete_items > 0 or partial_items > 0:
+            # Some items complete/partial but not all - use PARTIALLY_DELIVERED
+            supplier_order.status = SupplierOrderStatus.PARTIALLY_DELIVERED
+        # If no items received, keep current status (usually ORDERED)
     
     def get_delivery_summary(self, supplier_order_id: int) -> Dict[str, Any]:
         """Get delivery summary for a supplier order"""

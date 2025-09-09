@@ -18,6 +18,12 @@ class Client(PKMixin, TimestampMixin, Base):
     address: Mapped[str | None] = mapped_column(String(255))
     city: Mapped[str | None] = mapped_column(String(100))
     country: Mapped[str | None] = mapped_column(String(100))
+    
+    # Additional optional business registration fields
+    numero_rc: Mapped[str | None] = mapped_column(String(50))  # N° RC (Registre de Commerce)
+    nis: Mapped[str | None] = mapped_column(String(50))        # NIS (Numéro d'Identification Statistique)
+    nif: Mapped[str | None] = mapped_column(String(50))        # NIF (Numéro d'Identification Fiscale)
+    ai: Mapped[str | None] = mapped_column(String(50))         # AI (Article d'Imposition)
 
     orders: Mapped[list['ClientOrder']] = relationship(back_populates='client', cascade='all, delete-orphan')  # type: ignore[name-defined]
     quotations: Mapped[list['Quotation']] = relationship(back_populates='client', cascade='all, delete-orphan')  # type: ignore[name-defined]
