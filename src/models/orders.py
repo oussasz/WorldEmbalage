@@ -204,6 +204,7 @@ class ClientOrder(PKMixin, TimestampMixin, Base):
     quotation: Mapped['Quotation'] = relationship(back_populates='client_order')
     supplier_order: Mapped['SupplierOrder'] = relationship()
     line_items: Mapped[list['ClientOrderLineItem']] = relationship(back_populates='client_order', cascade='all, delete-orphan')
+    production_batches: Mapped[list['ProductionBatch']] = relationship(back_populates='client_order', cascade='all, delete-orphan')  # type: ignore[name-defined]
 
     deliveries: Mapped[list['Delivery']] = relationship(back_populates='client_order', cascade='all, delete-orphan')
     invoices: Mapped[list['Invoice']] = relationship(back_populates='client_order', cascade='all, delete-orphan')

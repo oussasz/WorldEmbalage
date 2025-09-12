@@ -1190,5 +1190,315 @@ class PDFFormFiller:
         c.save()
         return overlay_path
 
+    def fill_invoice_template(self, invoice_data: Dict[str, Any], output_filename: str | None = None) -> Path:
+        """
+        Fill the invoice PDF template (page.pdf) with invoice data.
+        
+        Args:
+            invoice_data: Dictionary containing invoice information
+            output_filename: Optional custom filename for output
+            
+        Returns:
+            Path to the generated PDF file
+        """
+        template_path = self.template_dir / "page.pdf"
+        
+        if not template_path.exists():
+            raise PDFFillError(f"Template not found: {template_path}")
+        
+        # Generate output filename if not provided
+        if not output_filename:
+            invoice_number = invoice_data.get('invoice_number', 'FACT')
+            timestamp = date.today().strftime('%Y%m%d')
+            output_filename = f"facture_{invoice_number}_{timestamp}.pdf"
+        
+        output_path = self.output_dir / output_filename
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Try to use PyPDF2 for form filling if available
+        if self._ensure_pypdf_installed():
+            return self._fill_invoice_pypdf(template_path, invoice_data, output_path)
+        else:
+            # Fallback to overlay method
+            return self._fill_invoice_overlay(template_path, invoice_data, output_path)
+    
+    def _fill_invoice_pypdf(self, template_path: Path, data: Dict[str, Any], output_path: Path) -> Path:
+        """Fill invoice PDF using PyPDF2 form fields."""
+        try:
+            import PyPDF2  # type: ignore
+        except ImportError:
+            raise PDFFillError("PyPDF2 not available")
+        
+        try:
+            with open(template_path, 'rb') as template_file:
+                pdf_reader = PyPDF2.PdfReader(template_file)
+                pdf_writer = PyPDF2.PdfWriter()
+                
+                # Check if PDF has form fields
+                if pdf_reader.get_fields():
+                    # Fill form fields
+                    field_data = self._prepare_invoice_form_data(data)
+                    
+                    for page in pdf_reader.pages:
+                        pdf_writer.add_page(page)
+                    
+                    pdf_writer.update_page_form_field_values(pdf_writer.pages[0], field_data)
+                    
+                    with open(output_path, 'wb') as output_file:
+                        pdf_writer.write(output_file)
+                else:
+                    # No form fields, use overlay method
+                    return self._fill_invoice_overlay(template_path, data, output_path)
+                
+            return output_path
+        except Exception as e:
+            raise PDFFillError(f"Error filling invoice PDF: {e}")
+    
+    def _fill_invoice_overlay(self, template_path: Path, data: Dict[str, Any], output_path: Path) -> Path:
+        """Fill invoice PDF using overlay method."""
+        try:
+            import PyPDF2  # type: ignore
+        except ImportError:
+            raise PDFFillError("PyPDF2 not available for overlay method")
+        
+        try:
+            # Create overlay with text
+            overlay_path = self._create_invoice_overlay(data)
+            
+            # Merge overlay with template
+            with open(template_path, 'rb') as template_file, open(overlay_path, 'rb') as overlay_file:
+                template_pdf = PyPDF2.PdfReader(template_file)
+                overlay_pdf = PyPDF2.PdfReader(overlay_file)
+                
+                pdf_writer = PyPDF2.PdfWriter()
+                
+                # Merge pages
+                template_page = template_pdf.pages[0]
+                overlay_page = overlay_pdf.pages[0]
+                template_page.merge_page(overlay_page)
+                pdf_writer.add_page(template_page)
+                
+                with open(output_path, 'wb') as output_file:
+                    pdf_writer.write(output_file)
+            
+            # Clean up temporary overlay file
+            overlay_path.unlink()
+            
+            return output_path
+        except Exception as e:
+            raise PDFFillError(f"Error creating invoice PDF overlay: {e}")
+    
+    def _prepare_invoice_form_data(self, data: Dict[str, Any]) -> Dict[str, str]:
+        """Prepare form field data for invoice template."""
+        return {
+            'numero_facture': str(data.get('invoice_number', '')),
+            'date_facture': str(data.get('invoice_date', '')),
+            'client_nom': str(data.get('client_name', '')),
+            'client_activite': str(data.get('client_activity', '')),
+            'client_adresse': str(data.get('client_address', '')),
+            'client_rc': str(data.get('client_rc', '')),
+            'client_nif': str(data.get('client_nif', '')),
+            'client_nis': str(data.get('client_nis', '')),
+            'client_ai': str(data.get('client_ai', '')),
+            'client_telephone': str(data.get('client_phone', '')),
+            'mode_paiement': str(data.get('payment_mode', '')),
+            'total_ht_brut': str(data.get('total_ht', '')),
+            'remise': str(data.get('discount', '0%')),
+            'total_ht_net': str(data.get('total_ht_net', '')),
+            'tva': str(data.get('tva', '')),
+            'total_ttc': str(data.get('total_ttc', '')),
+            'timbre': str(data.get('timbre', '0')),
+            'total_ttc_net': str(data.get('total_ttc_net', '')),
+            'montant_lettres': str(data.get('amount_in_words', '')),
+            'date_signature': str(data.get('signature_date', ''))
+        }
+    
+    def _create_invoice_overlay(self, data: Dict[str, Any]) -> Path:
+        """Create a text overlay for invoice data with professional styling."""
+        overlay_path = Path(tempfile.mktemp(suffix='.pdf'))
+        
+        # Create PDF with text at specific positions
+        c = canvas.Canvas(str(overlay_path), pagesize=A4)
+        width, height = A4
+        
+        # Define night blue color
+        night_blue = colors.HexColor("#1B4A7F")
+        
+        # Title "FACTURE" - bold, night blue, centered
+        c.setFont("Helvetica-Bold", 24)
+        c.setFillColor(night_blue)
+        title_text = "FACTURE"
+        title_width = c.stringWidth(title_text, "Helvetica-Bold", 24)
+        c.drawString((width - title_width) / 2, height - 80, title_text)
+        
+        # Invoice number and date - aligned left under title
+        c.setFont("Helvetica", 12)
+        c.setFillColor(colors.black)
+        invoice_number = data.get('invoice_number', '')
+        c.drawString(50, height - 120, f"N°: {invoice_number}")
+        
+        # Client information (aligned right)
+        c.setFont("Helvetica-Bold", 14)
+        client_name = data.get('client_name', '')
+        client_x = width - 200
+        c.drawString(client_x, height - 120, str(client_name))
+        
+        c.setFont("Helvetica", 11)
+        client_activity = data.get('client_activity', '')
+        if client_activity:
+            c.drawString(client_x, height - 140, str(client_activity))
+        
+        client_address = data.get('client_address', '')
+        if client_address:
+            c.drawString(client_x, height - 160, str(client_address))
+        
+        # RC, NIF, NIS, AI fields
+        client_rc = data.get('client_rc', '')
+        if client_rc:
+            c.drawString(client_x, height - 180, f"RC: {client_rc}")
+        
+        client_nif = data.get('client_nif', '')
+        if client_nif:
+            c.drawString(client_x, height - 200, f"NIF: {client_nif}")
+        
+        client_nis = data.get('client_nis', '')
+        if client_nis:
+            c.drawString(client_x, height - 220, f"NIS: {client_nis}")
+        
+        client_ai = data.get('client_ai', '')
+        if client_ai:
+            c.drawString(client_x, height - 240, f"AI: {client_ai}")
+        
+        client_phone = data.get('client_phone', '')
+        if client_phone:
+            c.drawString(client_x, height - 260, f"Tél: {client_phone}")
+        
+        # Payment mode
+        c.setFont("Helvetica", 10)
+        payment_mode = data.get('payment_mode', 'Mode de Paiement: …')
+        c.drawString(50, height - 280, str(payment_mode))
+        
+        # Table section - Invoice items table
+        if 'line_items' in data and data['line_items']:
+            table_data = [["N°", "Designation", "QTE", "P/U HT", "TVA", "Total HT"]]
+            
+            total_ht = Decimal('0')
+            for idx, item in enumerate(data['line_items'], 1):
+                unit_price = Decimal(str(item.get('unit_price', 0)))
+                quantity = int(item.get('quantity', 0))
+                line_total = unit_price * quantity
+                tva_rate = item.get('tva_rate', 19)
+                
+                table_data.append([
+                    str(idx),
+                    str(item.get('designation', '')),
+                    str(quantity),
+                    f"{unit_price:.2f}",
+                    f"{tva_rate}%",
+                    f"{line_total:.2f} DA"
+                ])
+                total_ht += line_total
+            
+            # Create and style the table with professional borders
+            table = Table(table_data, colWidths=[30, 200, 50, 70, 50, 95])
+            style = TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), night_blue),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 9),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('TOPPADDING', (0, 1), (-1, -1), 8),
+                ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('LINEBELOW', (0, 0), (-1, 0), 2, colors.black),
+                ('LINEABOVE', (0, 1), (-1, 1), 1, colors.black),
+            ])
+            
+            table.setStyle(style)
+            
+            # Position the table
+            table_width, table_height = table.wrap(0, 0)
+            x_position = (width - table_width) / 2
+            y_position = height - 380
+            table.wrapOn(c, width, height)
+            table.drawOn(c, x_position, y_position)
+            
+            # Summary section (aligned right, under table)
+            summary_x = width - 200
+            summary_y = y_position - 50
+            
+            c.setFont("Helvetica", 10)
+            total_ht_brut = data.get('total_ht', total_ht)
+            c.drawString(summary_x, summary_y, f"Total HT Brut: {total_ht_brut:.2f} DA")
+            
+            discount = data.get('discount', '0%')
+            c.drawString(summary_x, summary_y - 20, f"Remise: {discount}")
+            
+            total_ht_net = data.get('total_ht_net', total_ht_brut)
+            c.drawString(summary_x, summary_y - 40, f"Total HT Net: {total_ht_net:.2f} DA")
+            
+            tva_amount = data.get('tva_amount', total_ht_net * Decimal('0.19'))
+            c.drawString(summary_x, summary_y - 60, f"TVA (19%): {tva_amount:.2f} DA")
+            
+            total_ttc = data.get('total_ttc', total_ht_net + tva_amount)
+            c.drawString(summary_x, summary_y - 80, f"Total TTC: {total_ttc:.2f} DA")
+            
+            timbre = data.get('timbre', 0)
+            c.drawString(summary_x, summary_y - 100, f"TIMBRE 1%: {timbre}")
+            
+            # Total TTC NET - bold, night blue highlight
+            c.setFont("Helvetica-Bold", 12)
+            c.setFillColor(night_blue)
+            total_ttc_net = data.get('total_ttc_net', total_ttc)
+            c.drawString(summary_x, summary_y - 130, f"Total TTC NET: {total_ttc_net:.2f} DA")
+            
+            # Reset color for footer
+            c.setFillColor(colors.black)
+        
+        # Footer section
+        # Amount in words - sentence in red
+        c.setFont("Helvetica", 10)
+        c.setFillColor(colors.red)
+        amount_in_words = data.get('amount_in_words', '')
+        if amount_in_words:
+            # Split long text into multiple lines
+            max_width = width - 100
+            words = amount_in_words.split()
+            lines = []
+            current_line = ""
+            for word in words:
+                test_line = current_line + (" " if current_line else "") + word
+                if c.stringWidth(test_line, "Helvetica", 10) <= max_width:
+                    current_line = test_line
+                else:
+                    if current_line:
+                        lines.append(current_line)
+                    current_line = word
+            if current_line:
+                lines.append(current_line)
+            
+            # Draw each line
+            footer_y = 150
+            for line in lines:
+                c.drawString(50, footer_y, line)
+                footer_y -= 15
+        
+        # Signature placeholder bottom right
+        c.setFont("Helvetica", 10)
+        c.setFillColor(colors.black)
+        signature_x = width - 200
+        signature_y = 80
+        
+        c.drawString(signature_x, signature_y, "SIGNATURE: …")
+        
+        signature_date = data.get('signature_date', date.today().strftime('%d/%m/%Y'))
+        c.drawString(signature_x, signature_y - 20, f"Bejaia le: {signature_date}")
+        
+        c.save()
+        return overlay_path
+
 
 __all__ = ['PDFFormFiller', 'PDFFillError']

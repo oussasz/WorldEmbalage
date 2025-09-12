@@ -14,5 +14,8 @@ class ProductionBatch(PKMixin, TimestampMixin, Base):
     quantity: Mapped[int] = mapped_column(Integer, default=0)
     production_date: Mapped[date | None] = mapped_column(Date())
 
+    # Relationship to client order
+    client_order: Mapped['ClientOrder'] = relationship(back_populates='production_batches')  # type: ignore[name-defined]
+
 
 __all__ = ['ProductionBatch']

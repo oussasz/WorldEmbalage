@@ -381,7 +381,7 @@ class MainWindow(QMainWindow):
             self.production_grid.add_context_action("delete", "🗑️ Supprimer production")
             self.production_grid.add_context_action("print_fiche", "🖨️ Imprimer la fiche de produit fini")
             self.production_grid.add_context_action("print_delivery", "📋 Imprimer le bon de livraison")
-            self.production_grid.add_context_action("print_invoice", "💰 Imprimer la facture")
+            self.production_grid.add_context_action("create_invoice", "📝 Créer facture")
             
             # Add "Add finished product" button to production grid
             self.production_grid.add_action_button("➕ Ajouter Produit Fini", self._add_finished_product)
@@ -507,8 +507,11 @@ class MainWindow(QMainWindow):
                 if "bon de livraison" in action_text.lower():
                     action.setText("📋 Imprimer le bon de livraison")
                     action.setVisible(True)
-                elif "facture" in action_text.lower():
+                elif "imprimer la facture" in action_text.lower() or action_text == "💰 Imprimer la facture":
                     action.setText("💰 Imprimer la facture")
+                    action.setVisible(True)
+                elif "créer facture" in action_text.lower() or action_text == "📝 Créer facture":
+                    action.setText("📝 Créer facture")
                     action.setVisible(True)
                 
         else:
@@ -533,8 +536,11 @@ class MainWindow(QMainWindow):
                 if "bon de livraison" in action_text.lower():
                     action.setText("📋 Imprimer le bon de livraison")
                     action.setVisible(True)
-                elif "facture" in action_text.lower():
+                elif "imprimer la facture" in action_text.lower() or action_text == "💰 Imprimer la facture":
                     action.setText("💰 Imprimer la facture")
+                    action.setVisible(True)
+                elif "créer facture" in action_text.lower() or action_text == "📝 Créer facture":
+                    action.setText("📝 Créer facture")
                     action.setVisible(True)
 
     def _on_quotation_double_click(self, row: int):
@@ -2241,16 +2247,9 @@ class MainWindow(QMainWindow):
             # Convert grouped items to display format
             production_data = []
             for group_key, group_data in grouped_items.items():
-                # If multiple IDs, show as range or list
-                if len(group_data['ids']) == 1:
-                    id_display = group_data['ids'][0]
-                else:
-                    # Convert string IDs to integers for min/max calculation
-                    id_numbers = [int(id_str) for id_str in group_data['ids'] if id_str.isdigit()]
-                    if id_numbers:
-                        id_display = f"{min(id_numbers)}-{max(id_numbers)} ({len(group_data['ids'])})"
-                    else:
-                        id_display = f"Multi ({len(group_data['ids'])})"
+                # Always store the exact list of IDs in the first column (comma-separated)
+                # This ensures downstream actions (like invoicing) can resolve real IDs.
+                id_display = ",".join(group_data['ids'])
                 
                 # Use most recent production date if multiple
                 production_date = "N/A"
@@ -2683,6 +2682,8 @@ class MainWindow(QMainWindow):
             self._print_finished_product_fiche(row_data)
         elif action_name == "print_delivery":
             self._print_delivery_note_for_selection()
+        elif action_name == "create_invoice":
+            self._create_invoice_for_selection(row_data)
         elif action_name == "print_invoice":
             self._print_invoice_for_selection()
 
@@ -3394,13 +3395,16 @@ Détails individuels:"""
                 QMessageBox.warning(self, "Erreur", "Aucune donnée de production sélectionnée.")
                 return
             
-            # Parse ID field - could be single ID or merged format like "1-3 (2)"
+            # Parse ID field - could be single ID, comma-separated IDs, or merged format like "1-3 (2)"
             import re
             id_field = row_data[0]
             batch_ids = []
             
+            # Check for comma-separated IDs like "8,9,10,11,12"
+            if ',' in id_field and all(part.strip().isdigit() for part in id_field.split(',')):
+                batch_ids = [int(part.strip()) for part in id_field.split(',')]
             # Check if it's a merged format like "1-3 (2)" or just a single ID
-            if re.match(r'^\d+-\d+ \(\d+\)$', id_field):
+            elif re.match(r'^\d+-\d+ \(\d+\)$', id_field):
                 # Extract range from merged format
                 range_match = re.match(r'^(\d+)-(\d+) \((\d+)\)$', id_field)
                 if range_match:
@@ -3585,12 +3589,15 @@ Détails individuels:"""
             return
         
         try:
-            # Parse ID field - could be single ID or merged format like "1-3 (2)"
+            # Parse ID field - could be single ID, comma-separated IDs, or merged format like "1-3 (2)"
             id_field = row_data[0]
             batch_ids = []
             
+            # Check for comma-separated IDs like "8,9,10,11,12"
+            if ',' in id_field and all(part.strip().isdigit() for part in id_field.split(',')):
+                batch_ids = [int(part.strip()) for part in id_field.split(',')]
             # Check if it's a merged format like "1-3 (2)" or just a single ID
-            if re.match(r'^\d+-\d+ \(\d+\)$', id_field):
+            elif re.match(r'^\d+-\d+ \(\d+\)$', id_field):
                 # Extract range from merged format
                 range_match = re.match(r'^(\d+)-(\d+) \((\d+)\)$', id_field)
                 if range_match:
@@ -3647,9 +3654,17 @@ Détails individuels:"""
                             'email': getattr(line_item.client, 'email', '')
                         }
                 
+                # Get the designation from quotation line items if available
+                designation_from_quotation = ""
+                if client_order and client_order.quotation and client_order.quotation.line_items:
+                    # Use the first quotation line item description as the designation
+                    quotation_line_item = client_order.quotation.line_items[0]
+                    if quotation_line_item.description:
+                        designation_from_quotation = quotation_line_item.description
+                
                 # Create delivery item with merged data
                 delivery_items = [{
-                    'description': f"Cartons {row_data[2]}" if len(row_data) > 2 else "Cartons",
+                    'description': designation_from_quotation if designation_from_quotation else (f"Cartons {row_data[2]}" if len(row_data) > 2 else "Cartons"),
                     'quantity': total_quantity,
                     'unit_price': 0.0,  # Will be calculated if needed
                     'batch_ids': batch_ids,
@@ -3812,12 +3827,19 @@ Détails individuels:"""
                         
                         client = client_order.client
                         
-                        # Get dimensions from quotation if available
+                        # Get dimensions and designation from quotation if available
                         box_dimensions = "N/A"
+                        quotation_designation = ""
                         if client_order.quotation and client_order.quotation.line_items:
                             line_item = client_order.quotation.line_items[0]  # First item
                             if line_item.length_mm and line_item.width_mm and line_item.height_mm:
                                 box_dimensions = f"{line_item.length_mm}×{line_item.width_mm}×{line_item.height_mm}"
+                            # Get designation from quotation description
+                            if line_item.description:
+                                quotation_designation = line_item.description
+                        
+                        # Use quotation description as designation, fallback to generic description
+                        designation = quotation_designation if quotation_designation else f"Caisse {client_order.reference}"
                         
                         # Group by client ID
                         client_groups[client.id].append({
@@ -3825,7 +3847,7 @@ Détails individuels:"""
                             'client_order': client_order,
                             'batch': batch,
                             'dimensions': box_dimensions,
-                            'designation': f"Caisse {client_order.reference}"
+                            'designation': designation
                         })
                     
                     # Generate delivery note for each client group
@@ -3944,6 +3966,109 @@ Détails individuels:"""
                     "Erreur",
                     f"Erreur lors de la génération multiple: {str(e)}"
                 )
+
+    def _create_invoice_for_selection(self, row_data: list):
+        """Create invoice for selected finished product(s)"""
+        # Check if production grid is available
+        if not self.production_grid or not hasattr(self.production_grid, 'get_selected_rows_data'):
+            QMessageBox.warning(self, 'Erreur', 'Grille de production non disponible')
+            return
+        
+        # Get selected rows data - if no selection, use the clicked row
+        selected_rows_data = self.production_grid.get_selected_rows_data()
+        if not selected_rows_data and row_data:
+            # If no rows are selected but we have the clicked row, use it
+            selected_rows_data = [row_data]
+        elif not selected_rows_data:
+            QMessageBox.warning(self, 'Erreur', 'Aucun produit fini sélectionné')
+            return
+        
+        try:
+            # Extract production IDs
+            production_ids = []
+            for row in selected_rows_data:
+                if len(row) < 1:
+                    continue
+                raw = (row[0] or "").strip()
+                if not raw:
+                    continue
+                # Support formats:
+                #  - "123"
+                #  - "12,13,18"
+                #  - "10-15 (6)" (fallback: assume consecutive IDs)
+                try:
+                    if "," in raw:
+                        for part in raw.split(","):
+                            part = part.strip()
+                            if part.isdigit():
+                                production_ids.append(int(part))
+                    elif "-" in raw:
+                        # Extract range like "10-15" optionally followed by count
+                        range_part = raw.split(" ")[0]
+                        a_str, b_str = range_part.split("-", 1)
+                        a = int(a_str)
+                        b = int(b_str)
+                        if a <= b:
+                            production_ids.extend(list(range(a, b + 1)))
+                    else:
+                        production_ids.append(int(raw))
+                except (ValueError, TypeError):
+                    # Skip unparsable entries
+                    continue
+            
+            if not production_ids:
+                QMessageBox.warning(self, 'Erreur', 'Aucun produit fini valide sélectionné')
+                return
+            
+            # Import required services
+            from services.invoice_service import InvoiceService
+            from services.pdf_form_filler import PDFFormFiller, PDFFillError
+            
+            # Prepare invoice data
+            with InvoiceService() as invoice_service:
+                invoice_data = invoice_service.prepare_invoice_data(production_ids)
+            
+            # Generate PDF invoice
+            pdf_filler = PDFFormFiller()
+            try:
+                output_path = pdf_filler.fill_invoice_template(invoice_data)
+                
+                # Try to open the PDF with default system viewer
+                if output_path.exists():
+                    import subprocess
+                    import os
+                    
+                    if os.name == 'nt':  # Windows
+                        os.startfile(str(output_path))
+                    elif os.name == 'posix':  # Linux/Unix
+                        subprocess.run(['xdg-open', str(output_path)], check=False)
+                    else:  # macOS
+                        subprocess.run(['open', str(output_path)], check=False)
+                    
+                    QMessageBox.information(
+                        self, 
+                        'Succès', 
+                        f'Facture générée avec succès:\n{output_path.name}\n\n'
+                        f'Numéro: {invoice_data.get("invoice_number", "N/A")}\n'
+                        f'Client: {invoice_data.get("client_name", "N/A")}\n'
+                        f'Total TTC NET: {invoice_data.get("total_ttc_net", 0):.2f} DA\n\n'
+                        f'Emplacement: {output_path.parent}'
+                    )
+                    
+                    # Add activity to dashboard
+                    self.dashboard.add_activity("F", f"Facture créée: {invoice_data.get('invoice_number', 'N/A')}", "#28A745")
+                else:
+                    QMessageBox.warning(self, 'Erreur', 'Le fichier PDF n\'a pas pu être créé')
+                    
+            except PDFFillError as e:
+                QMessageBox.critical(self, 'Erreur PDF', f'Erreur lors de la génération de la facture:\n{str(e)}')
+            except Exception as e:
+                QMessageBox.critical(self, 'Erreur', f'Erreur inattendue lors de la génération:\n{str(e)}')
+                
+        except Exception as e:
+            QMessageBox.critical(self, 'Erreur', f'Erreur lors de la création de la facture:\n{str(e)}')
+            import logging
+            logging.error(f"Error creating invoice: {e}")
 
     def _print_invoice_for_selection(self):
         """Print invoices for selected finished products"""

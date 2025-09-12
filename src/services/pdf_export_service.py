@@ -121,7 +121,7 @@ def export_finished_product_fiche(production_batch_id: int, quantity: int,
         Path to the generated PDF file, or None if export failed
     """
     from models.production import ProductionBatch
-    from models.orders import ClientOrder
+    from models.orders import ClientOrder, Quotation
     from models.clients import Client
     from sqlalchemy.orm import joinedload
     
@@ -132,10 +132,11 @@ def export_finished_product_fiche(production_batch_id: int, quantity: int,
         if not batch:
             return None
         
-        # Get client order information with client data
+        # Get client order information with client data and quotation
         client_order = session.query(ClientOrder).options(
             joinedload(ClientOrder.client),
-            joinedload(ClientOrder.line_items)
+            joinedload(ClientOrder.line_items),
+            joinedload(ClientOrder.quotation).joinedload(Quotation.line_items)
         ).filter(ClientOrder.id == batch.client_order_id).first()
         
         if not client_order:
@@ -181,9 +182,16 @@ def _prepare_finished_product_data(batch, client_order, quantity: int, copy_numb
     if client_order and client_order.client:
         client_name = client_order.client.name
     
-    # Use dimensions override from UI grid if provided, otherwise try database
+    # Use dimensions override from UI grid if provided, otherwise try quotation description
     dimensions = dimensions_override or ""
     
+    # PRIORITY: Try to get description/designation from quotation first
+    if not dimensions and client_order and client_order.quotation and client_order.quotation.line_items:
+        quotation_line_item = client_order.quotation.line_items[0]
+        if quotation_line_item.description:
+            dimensions = quotation_line_item.description
+    
+    # Fallback to client order line items
     if not dimensions and client_order and client_order.line_items:
         # Get dimensions from the first line item (assuming all items have same dimensions)
         first_item = client_order.line_items[0]
