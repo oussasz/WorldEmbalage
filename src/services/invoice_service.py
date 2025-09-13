@@ -38,8 +38,12 @@ class InvoiceService:
         """
         try:
             # Get production batches with relationships
-            # Get production batches with basic relationships
-            productions = self.session.query(ProductionBatch).filter(
+            from sqlalchemy.orm import joinedload
+            productions = self.session.query(ProductionBatch).options(
+                joinedload(ProductionBatch.client_order).joinedload(ClientOrder.client),
+                joinedload(ProductionBatch.client_order).joinedload(ClientOrder.quotation).joinedload(Quotation.line_items),
+                joinedload(ProductionBatch.client_order).joinedload(ClientOrder.supplier_order)
+            ).filter(
                 ProductionBatch.id.in_(production_ids)
             ).all()
             

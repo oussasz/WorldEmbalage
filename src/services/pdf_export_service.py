@@ -184,12 +184,36 @@ def _prepare_finished_product_data(batch, client_order, quantity: int, copy_numb
     
     # Use dimensions override from UI grid if provided, otherwise try quotation description
     dimensions = dimensions_override or ""
+    designation = ""  # explicit designation field for PF
     
     # PRIORITY: Try to get description/designation from quotation first
     if not dimensions and client_order and client_order.quotation and client_order.quotation.line_items:
         quotation_line_item = client_order.quotation.line_items[0]
         if quotation_line_item.description:
             dimensions = quotation_line_item.description
+            designation = quotation_line_item.description
+            print(f"DEBUG Product Sheet: Found direct quotation description: '{dimensions}'")
+    
+    # Fallback: Look for most recent quotation for the same client if no direct quotation link
+    if not dimensions and client_order and client_order.client:
+        from models.orders import Quotation, QuotationLineItem
+        from sqlalchemy import desc
+        from config.database import SessionLocal
+        
+        session = SessionLocal()
+        try:
+            most_recent_quotation = session.query(Quotation).filter(
+                Quotation.client_id == client_order.client.id
+            ).order_by(desc(Quotation.issue_date)).first()
+            
+            if most_recent_quotation and most_recent_quotation.line_items:
+                quotation_line_item = most_recent_quotation.line_items[0]
+                if quotation_line_item.description:
+                    dimensions = quotation_line_item.description
+                    designation = quotation_line_item.description
+                    print(f"DEBUG Product Sheet: Found recent quotation description: '{dimensions}'")
+        finally:
+            session.close()
     
     # Fallback to client order line items
     if not dimensions and client_order and client_order.line_items:
@@ -200,10 +224,15 @@ def _prepare_finished_product_data(batch, client_order, quantity: int, copy_numb
         elif hasattr(first_item, 'description') and first_item.description:
             # Try to extract dimensions from description if available
             dimensions = first_item.description
+            if not designation:
+                designation = first_item.description
     
     # If no dimensions found, use default
     if not dimensions:
         dimensions = "Dimensions non spécifiées"
+        print(f"DEBUG Product Sheet: Using fallback description: '{dimensions}'")
+    if not designation:
+        designation = dimensions
     
     # Generate unique reference for this fiche using unified system
     from utils.reference_generator import generate_finished_product_reference
@@ -219,6 +248,7 @@ def _prepare_finished_product_data(batch, client_order, quantity: int, copy_numb
         'client': client_name,
         'quantity': quantity,
         'dimensions': dimensions,
+        'designation': designation,
         'batch_code': batch.batch_code or '',
         'reference': reference,
         'copy_info': copy_info
@@ -338,6 +368,39 @@ def _prepare_raw_material_label_data_simple(reception_ids: list[int], total_quan
     # Get client names
     client_name = ", ".join(sorted(clients)) if clients else "Client non spécifié"
     
+    # Try to get quotation description for the first client
+    quotation_description = ""
+    if supplier_order and supplier_order.line_items:
+        from models.orders import Quotation, QuotationLineItem
+        from sqlalchemy import desc
+        from config.database import SessionLocal
+        
+        session = SessionLocal()
+        try:
+            # Get the first client from supplier order line items
+            first_line_item = supplier_order.line_items[0]
+            if hasattr(first_line_item, 'client') and first_line_item.client:
+                client = first_line_item.client
+                
+                # Look for most recent quotation for this client
+                most_recent_quotation = session.query(Quotation).filter(
+                    Quotation.client_id == client.id
+                ).order_by(desc(Quotation.issue_date)).first()
+                
+                if most_recent_quotation and most_recent_quotation.line_items:
+                    quotation_line_item = most_recent_quotation.line_items[0]
+                    if quotation_line_item.description:
+                        quotation_description = quotation_line_item.description
+                        print(f"DEBUG Raw Material Label: Found quotation description: '{quotation_description}' for client {client.name}")
+        except Exception as e:
+            print(f"DEBUG Raw Material Label: Error getting quotation description: {e}")
+        finally:
+            session.close()
+    
+    if not quotation_description:
+        quotation_description = caisse_dimensions or "Cartons"
+        print(f"DEBUG Raw Material Label: Using fallback description: '{quotation_description}'")
+    
     # Generate unique label number using unified system
     from utils.reference_generator import generate_raw_material_label_reference
     ids_str = "_".join(map(str, reception_ids))
@@ -354,7 +417,7 @@ def _prepare_raw_material_label_data_simple(reception_ids: list[int], total_quan
         'quantity': total_quantity,
         'label_number': label_number,
         'plaque_dimensions': plaque_dimensions or "Non spécifiées",
-        'caisse_dimensions': caisse_dimensions or "Non spécifiées", 
+        'caisse_dimensions': quotation_description,  # Use quotation description instead of raw dimensions
         'cliche': "Oui" if is_cliche else "Non",
         'remark': remark,
         'bon_commande': bon_commande,

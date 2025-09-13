@@ -982,7 +982,10 @@ class PDFFormFiller:
             'date_production': str(data.get('production_date', '')),
             'client': str(data.get('client', '')),
             'quantite': str(data.get('quantity', '')),
-            'dimensions': str(data.get('dimensions', '')),
+            # Map both dimensions and designation (description from devis);
+            # many templates label the text box as 'dimensions'. We'll prefer designation if available
+            'dimensions': str(data.get('designation') or data.get('dimensions', '')),
+            'designation': str(data.get('designation', '')),
             'reference': str(data.get('reference', ''))
         }
     
@@ -1014,8 +1017,8 @@ class PDFFormFiller:
         quantity = data.get('quantity', '')
         c.drawString(150, height - 250, f"{quantity} caisses")
         
-        # Dimensions de caisse
-        dimensions = data.get('dimensions', '')
+        # Dimensions / Désignation (prefer designation from devis; fallback to dimensions)
+        dimensions = data.get('designation') or data.get('dimensions', '')
         c.drawString(150, height - 300, str(dimensions))
         
         c.save()

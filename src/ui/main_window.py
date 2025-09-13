@@ -12,8 +12,8 @@ from PyQt6.QtCore import Qt, QSize
 from config.database import SessionLocal
 from models.suppliers import Supplier
 from models.clients import Client
-from models.orders import ClientOrder, SupplierOrder
-from models.orders import SupplierOrderStatus, ClientOrderStatus, Reception, Quotation
+from models.orders import ClientOrder, SupplierOrder, SupplierOrderLineItem
+from models.orders import SupplierOrderStatus, ClientOrderStatus, Reception, Quotation, QuotationLineItem
 from models.production import ProductionBatch
 from ui.dialogs.supplier_dialog import SupplierDialog
 from ui.dialogs.client_dialog import ClientDialog
@@ -280,8 +280,8 @@ class MainWindow(QMainWindow):
         
         # 4. Stock (Split view: Raw materials and Finished products)
         self.stock_split = SplitView(
-            "Matières Premières", ["ID", "Quantité", "Fournisseur", "Bon Commande", "Client", "Date Réception"],
-            "Produits Finis", ["ID", "Client", "Dimensions Caisse", "Quantité", "Statut"]
+            "Matières Premières", ["ID", "Quantité", "Fournisseur", "Bon Commande", "Client", "Description", "Date Réception"],
+            "Produits Finis", ["ID", "Client", "Dimensions Caisse", "Quantité", "Description", "Statut"]
         )
         # Add Raw Material Arrival button to the left side (Raw materials)
         self.stock_split.add_left_action_button("📦 Arrivée Matière Première", self._raw_material_arrival)
@@ -382,6 +382,7 @@ class MainWindow(QMainWindow):
             self.production_grid.add_context_action("print_fiche", "🖨️ Imprimer la fiche de produit fini")
             self.production_grid.add_context_action("print_delivery", "📋 Imprimer le bon de livraison")
             self.production_grid.add_context_action("create_invoice", "📝 Créer facture")
+            self.production_grid.add_context_action("move_to_archive", "📦 Move to Archive")
             
             # Add "Add finished product" button to production grid
             self.production_grid.add_action_button("➕ Ajouter Produit Fini", self._add_finished_product)
@@ -1800,8 +1801,10 @@ class MainWindow(QMainWindow):
             ]
             self.clients_suppliers_split.load_right_data(clients_data)
             
-            # Refresh orders (quotations only) - filter out orphaned records
-            quotations = session.query(Quotation).join(Quotation.client).all()
+            # Refresh orders (quotations only) - filter out orphaned and archived records
+            quotations = session.query(Quotation).join(Quotation.client).filter(
+                ~Quotation.notes.like('[ARCHIVED]%')
+            ).all()
             
             orders_data = []
             row_colors = []
@@ -1884,8 +1887,10 @@ class MainWindow(QMainWindow):
                 
             self.orders_grid.load_rows_with_colors(orders_data, row_colors)
             
-            # Refresh client orders
-            client_orders = session.query(ClientOrder).join(ClientOrder.client).all()
+            # Refresh client orders - filter out archived ones
+            client_orders = session.query(ClientOrder).join(ClientOrder.client).filter(
+                ~ClientOrder.notes.like('[ARCHIVED]%')
+            ).all()
             client_orders_data = []
             client_order_colors = []
             
@@ -1942,8 +1947,10 @@ class MainWindow(QMainWindow):
             
             self.client_orders_grid.load_rows_with_colors(client_orders_data, client_order_colors)
             
-            # Refresh supplier orders with comprehensive information
-            supplier_orders = session.query(SupplierOrder).join(SupplierOrder.supplier).all()
+            # Refresh supplier orders with comprehensive information - filter out archived ones
+            supplier_orders = session.query(SupplierOrder).join(SupplierOrder.supplier).filter(
+                ~SupplierOrder.notes.like('[ARCHIVED]%')
+            ).all()
             
             # Map internal status values to display labels
             status_display_map = {
@@ -2060,7 +2067,10 @@ class MainWindow(QMainWindow):
                 self.supplier_orders_quad.bottom_right_grid.load_rows_with_colors(completed_data, completed_colors)
             
             # Refresh stock - Raw materials (receptions) on left side
-            receptions = session.query(Reception).all()
+            # Refresh stock - Raw materials (receptions) - filter out archived supplier orders
+            receptions = session.query(Reception).join(Reception.supplier_order).filter(
+                ~SupplierOrder.notes.like('[ARCHIVED]%')
+            ).all()
             
             # Group receptions by dimensions (extracted from notes) and sum quantities
             grouped_receptions = {}
@@ -2156,19 +2166,63 @@ class MainWindow(QMainWindow):
             # Convert grouped data to display format
             receptions_data = []
             for group_key, group in grouped_receptions.items():
+                # Get quotation description for raw materials
+                description = "N/A"
+                
+                # Try to get description from first reception in group
+                if group['ids']:
+                    first_reception_id = group['ids'][0]
+                    try:
+                        reception = session.query(Reception).filter(Reception.id == first_reception_id).first()
+                        if reception and reception.supplier_order:
+                            supplier_order = reception.supplier_order
+                            
+                            # Get first line item to find client and quotation info
+                            if hasattr(supplier_order, 'line_items') and supplier_order.line_items:
+                                first_line_item = supplier_order.line_items[0]
+                                
+                                # Find client order through client_id
+                                if hasattr(first_line_item, 'client_id') and first_line_item.client_id:
+                                    # Look for client order with this client and supplier order
+                                    client_order = session.query(ClientOrder).filter(
+                                        ClientOrder.client_id == first_line_item.client_id,
+                                        ClientOrder.supplier_order_id == supplier_order.id
+                                    ).first()
+                                    
+                                    if client_order and client_order.quotation:
+                                        quotation = client_order.quotation
+                                        
+                                        # Try line items first (priority)
+                                        if quotation.line_items:
+                                            first_quotation_line = quotation.line_items[0]
+                                            if first_quotation_line.description:
+                                                description = first_quotation_line.description
+                                        
+                                        # Fallback to quotation notes
+                                        if description == "N/A" and quotation.notes:
+                                            description = quotation.notes
+                                    
+                    except Exception as e:
+                        print(f"Error fetching description for reception {first_reception_id}: {e}")
+                        description = "N/A"
+                
                 receptions_data.append([
                     ",".join(map(str, group['ids'])),  # Store all IDs for context menu
                     str(group['quantity']),  # Quantity (summed)
                     group['supplier'],  # Supplier
                     group['bon_commande'],  # Bon Commande (merged)
                     group['clients'],  # Client(s) (merged)
+                    description,  # Description from quotation
                     group['date'],  # Date (most recent)
                 ])
             
             self.stock_split.load_left_data(receptions_data)
             
             # Refresh stock - Finished products (production) on right side
-            production_batches = session.query(ProductionBatch).all()
+            # Filter out archived production batches
+            production_batches = session.query(ProductionBatch).filter(
+                ~ProductionBatch.batch_code.like('[ARCHIVED]%')
+            ).all()
             
             # Use a dictionary to group items by client and dimensions
             grouped_items = {}
@@ -2177,39 +2231,110 @@ class MainWindow(QMainWindow):
                 try:
                     # Get client order and related information
                     client_name = "N/A"
+                    client_id = None
                     plaque_dims = "N/A"
                     caisse_dims = "N/A"
                     material_type = "N/A"
                     
                     if pb.client_order_id:
+                        # Load client order first, then related data separately to avoid relationship issues
                         client_order = session.query(ClientOrder).filter(
                             ClientOrder.id == pb.client_order_id
                         ).first()
                         
-                        if client_order and client_order.supplier_order_id:
-                            supplier_order = session.query(SupplierOrder).filter(
-                                SupplierOrder.id == client_order.supplier_order_id
+                        if client_order:
+                            # First, check supplier order line item for client info (priority)
+                            # This often has the most accurate client information
+                            if client_order.supplier_order_id:
+                                try:
+                                    supplier_order = session.query(SupplierOrder).filter(
+                                        SupplierOrder.id == client_order.supplier_order_id
+                                    ).first()
+                                    
+                                    if supplier_order:
+                                        supplier_line_items = session.query(SupplierOrderLineItem).filter(
+                                            SupplierOrderLineItem.supplier_order_id == supplier_order.id
+                                        ).first()
+                                        
+                                        if supplier_line_items and supplier_line_items.client_id:
+                                            # PRIORITY: Use client from supplier line item (most accurate)
+                                            client = session.query(Client).filter(
+                                                Client.id == supplier_line_items.client_id
+                                            ).first()
+                                            if client:
+                                                client_name = client.name
+                                                client_id = client.id
+                                            
+                                            # Get dimensions from supplier line item
+                                            if supplier_line_items.caisse_length_mm and supplier_line_items.caisse_width_mm and supplier_line_items.caisse_height_mm:
+                                                caisse_dims = f"{supplier_line_items.caisse_length_mm}×{supplier_line_items.caisse_width_mm}×{supplier_line_items.caisse_height_mm}"
+                                
+                                except Exception as supplier_error:
+                                    print(f"Error loading supplier order for client order {client_order.id}: {supplier_error}")
+                            
+                            # FALLBACK: Get client information from client order if not found above
+                            if client_name == "N/A" and client_order.client_id:
+                                client = session.query(Client).filter(
+                                    Client.id == client_order.client_id
+                                ).first()
+                                if client:
+                                    client_name = client.name
+                                    client_id = client.id
+                            
+                            # Get dimensions from quotation if available and not already found
+                            if caisse_dims == "N/A" and client_order.quotation_id:
+                                try:
+                                    quotation = session.query(Quotation).filter(
+                                        Quotation.id == client_order.quotation_id
+                                    ).first()
+                                    if quotation:
+                                        quotation_lines = session.query(QuotationLineItem).filter(
+                                            QuotationLineItem.quotation_id == quotation.id
+                                        ).first()
+                                        if quotation_lines and quotation_lines.length_mm and quotation_lines.width_mm and quotation_lines.height_mm:
+                                            caisse_dims = f"{quotation_lines.length_mm}×{quotation_lines.width_mm}×{quotation_lines.height_mm}"
+                                except Exception as quotation_error:
+                                    print(f"Error loading quotation for client order {client_order.id}: {quotation_error}")
+                    
+                    # Get quotation description for finished products
+                    description = "N/A"
+                    
+                    # Try to get description from client order -> quotation
+                    if pb.client_order_id:
+                        try:
+                            client_order = session.query(ClientOrder).filter(
+                                ClientOrder.id == pb.client_order_id
                             ).first()
                             
-                            if supplier_order and supplier_order.line_items:
-                                line_item = supplier_order.line_items[0]
+                            if client_order and client_order.quotation:
+                                quotation = client_order.quotation
                                 
-                                # Get client name from line item
-                                if line_item.client:
-                                    client_name = line_item.client.name
+                                # Try line items first (priority)
+                                if quotation.line_items:
+                                    first_quotation_line = quotation.line_items[0]
+                                    if first_quotation_line.description:
+                                        description = first_quotation_line.description
                                 
-                                # Get dimensions and material info
-                                plaque_dims = f"{line_item.plaque_width_mm}×{line_item.plaque_length_mm}×{line_item.plaque_flap_mm}"
-                                caisse_dims = f"{line_item.caisse_length_mm}×{line_item.caisse_width_mm}×{line_item.caisse_height_mm}"
-                                material_type = line_item.cardboard_type or "Standard"
+                                # Fallback to quotation notes
+                                if description == "N/A" and quotation.notes:
+                                    description = quotation.notes
+                                    
+                        except Exception as desc_error:
+                            print(f"Error fetching description for production batch {pb.id}: {desc_error}")
                     
                     # Format production date
                     production_date = "N/A"
                     if hasattr(pb, 'production_date') and pb.production_date:
                         production_date = pb.production_date.strftime('%Y-%m-%d')
                     
-                    # Create grouping key based on client and dimensions
-                    group_key = (client_name, caisse_dims)
+                    # STRICT GROUPING: Only group if SAME CLIENT ID + SAME EXACT DIMENSIONS
+                    # This ensures products are only merged if they truly belong to same client with identical specs
+                    group_key = (client_id, caisse_dims)
+                    
+                    # Skip grouping if we don't have both client_id and dimensions
+                    if client_id is None or caisse_dims == "N/A":
+                        # Create unique key for ungroupable items to prevent incorrect merging
+                        group_key = (f"ungroupable_{pb.id}", f"batch_{pb.id}")
                     
                     # Initialize group if it doesn't exist
                     if group_key not in grouped_items:
@@ -2218,7 +2343,8 @@ class MainWindow(QMainWindow):
                             'client_name': client_name,
                             'dimensions': caisse_dims,
                             'total_quantity': 0,
-                            'production_dates': []
+                            'production_dates': [],
+                            'description': description
                         }
                     
                     # Add to grouped items
@@ -2228,21 +2354,49 @@ class MainWindow(QMainWindow):
                     if production_date != "N/A":
                         group_item['production_dates'].append(production_date)
                     
-                except Exception as e:
-                    # Fallback data if there's an error loading details
-                    group_key = (f"Erreur {pb.id}", "N/A")
-                    if group_key not in grouped_items:
-                        grouped_items[group_key] = {
-                            'ids': [],
-                            'client_name': "Erreur de chargement",
-                            'dimensions': "N/A",
-                            'total_quantity': 0,
-                            'production_dates': []
-                        }
+                    # If we don't have a description yet in the group, try to use this one
+                    if group_item.get('description', 'N/A') == 'N/A' and description != 'N/A':
+                        group_item['description'] = description
                     
-                    group_item = grouped_items[group_key]
-                    group_item['ids'].append(str(pb.id))
-                    group_item['total_quantity'] += int(getattr(pb, 'quantity', 0) or 0)
+                except Exception as e:
+                    # Log the error for debugging
+                    print(f"Error loading production batch {pb.id}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    
+                    # Fallback data if there's an error loading details - use simpler approach
+                    try:
+                        # Simple fallback: just get basic client info without complex relationships
+                        client_name = "Client inconnu"
+                        if pb.client_order_id:
+                            client_order = session.query(ClientOrder).filter(
+                                ClientOrder.id == pb.client_order_id
+                            ).first()
+                            if client_order and client_order.client_id:
+                                client = session.query(Client).filter(Client.id == client_order.client_id).first()
+                                if client:
+                                    client_name = client.name
+                        
+                        # Create simple group key without complex logic
+                        group_key = (f"simple_{pb.id}", "N/A")
+                        if group_key not in grouped_items:
+                            grouped_items[group_key] = {
+                                'ids': [],
+                                'client_name': client_name,
+                                'dimensions': "N/A",
+                                'total_quantity': 0,
+                                'production_dates': [],
+                                'description': "N/A"
+                            }
+                        
+                        group_item = grouped_items[group_key]
+                        group_item['ids'].append(str(pb.id))
+                        group_item['total_quantity'] += int(getattr(pb, 'quantity', 0) or 0)
+                        
+                    except Exception as fallback_error:
+                        print(f"Fallback error for batch {pb.id}: {str(fallback_error)}")
+                        # Ultimate fallback - just skip this batch
+                        continue
             
             # Convert grouped items to display format
             production_data = []
@@ -2261,6 +2415,7 @@ class MainWindow(QMainWindow):
                     group_data['client_name'],
                     group_data['dimensions'],
                     str(group_data['total_quantity']),
+                    group_data.get('description', 'N/A'),  # Description from quotation
                     production_date
                 ])
             
@@ -2686,6 +2841,141 @@ class MainWindow(QMainWindow):
             self._create_invoice_for_selection(row_data)
         elif action_name == "print_invoice":
             self._print_invoice_for_selection()
+        elif action_name == "move_to_archive":
+            self._move_production_to_archive(row_data)
+
+    def _move_production_to_archive(self, row_data: list):
+        """Move production batch to archive"""
+        from PyQt6.QtWidgets import QMessageBox
+        from config.database import SessionLocal
+        from models.production import ProductionBatch
+        from models.orders import ClientOrder, Quotation
+        
+        if not row_data or len(row_data) < 1:
+            QMessageBox.warning(self, 'Erreur', 'Données de production invalides')
+            return
+        
+        # Parse production batch IDs (might be comma-separated for grouped items)
+        production_ids_str = row_data[0]
+        try:
+            production_ids = [int(id_str.strip()) for id_str in production_ids_str.split(',')]
+        except (ValueError, AttributeError):
+            QMessageBox.warning(self, 'Erreur', 'ID de production invalide')
+            return
+        
+        client_name = row_data[1] if len(row_data) > 1 else "N/A"
+        dimensions = row_data[2] if len(row_data) > 2 else "N/A"
+        quantity = row_data[3] if len(row_data) > 3 else "N/A"
+        
+        # Confirm the action
+        reply = QMessageBox.question(
+            self,
+            'Confirmer l\'archivage',
+            f'Êtes-vous sûr de vouloir archiver cette production ?\n\n'
+            f'Client: {client_name}\n'
+            f'Dimensions: {dimensions}\n'
+            f'Quantité: {quantity}\n\n'
+            f'Cette action déplacera toutes les données associées '
+            f'(devis, commandes matières premières, etc.) vers l\'archive '
+            f'et les masquera du flux de travail actif.\n\n'
+            f'Cette action peut être annulée depuis l\'onglet Archive.',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        
+        session = SessionLocal()
+        try:
+            # Get all production batches to archive
+            production_batches = session.query(ProductionBatch).filter(
+                ProductionBatch.id.in_(production_ids)
+            ).all()
+            
+            if not production_batches:
+                QMessageBox.warning(self, 'Erreur', 'Aucun lot de production trouvé')
+                return
+            
+            archived_items = []
+            
+            # For each production batch, trace back and mark related items as archived
+            for pb in production_batches:
+                # Mark production batch as archived by modifying batch_code
+                archive_marker = f"[ARCHIVED]"
+                
+                # Mark production batch as archived by adding to batch_code
+                if not pb.batch_code.startswith("[ARCHIVED]"):
+                    pb.batch_code = f"[ARCHIVED] {pb.batch_code}"
+                
+                archived_items.append(f"Production batch {pb.id} ({pb.batch_code})")
+                
+                # Mark related client order as archived if it exists
+                if pb.client_order_id:
+                    client_order = session.query(ClientOrder).filter(
+                        ClientOrder.id == pb.client_order_id
+                    ).first()
+                    
+                    if client_order:
+                        # Mark client order as archived in notes
+                        if hasattr(client_order, 'notes'):
+                            if client_order.notes:
+                                if "[ARCHIVED" not in client_order.notes:
+                                    client_order.notes = f"{archive_marker} {client_order.notes}"
+                            else:
+                                client_order.notes = archive_marker
+                        
+                        archived_items.append(f"Client order {client_order.reference}")
+                        
+                        # Mark related quotation as archived
+                        if hasattr(client_order, 'quotation') and client_order.quotation:
+                            quotation = client_order.quotation
+                            if hasattr(quotation, 'notes'):
+                                if quotation.notes:
+                                    if "[ARCHIVED" not in quotation.notes:
+                                        quotation.notes = f"{archive_marker} {quotation.notes}"
+                                else:
+                                    quotation.notes = archive_marker
+                            
+                            archived_items.append(f"Quotation {quotation.reference}")
+                        
+                        # Mark related supplier order as archived
+                        if hasattr(client_order, 'supplier_order') and client_order.supplier_order:
+                            supplier_order = client_order.supplier_order
+                            if hasattr(supplier_order, 'notes'):
+                                if supplier_order.notes:
+                                    if "[ARCHIVED" not in supplier_order.notes:
+                                        supplier_order.notes = f"{archive_marker} {supplier_order.notes}"
+                                else:
+                                    supplier_order.notes = archive_marker
+                            
+                            archived_items.append(f"Supplier order {supplier_order.reference}")
+            
+            # Commit the changes
+            session.commit()
+            
+            # Show success message with summary
+            archived_summary = '\n'.join(archived_items)
+            QMessageBox.information(
+                self,
+                'Archivage terminé',
+                f'Les éléments suivants ont été archivés avec succès :\n\n{archived_summary}\n\n'
+                f'Ces données sont maintenant masquées du flux de travail actif '
+                f'mais restent accessibles dans l\'onglet Archive.'
+            )
+            
+            # Refresh the grids to hide archived items
+            self.refresh_all()
+            
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(
+                self,
+                'Erreur',
+                f'Erreur lors de l\'archivage : {str(e)}'
+            )
+        finally:
+            session.close()
 
     def _on_production_double_click(self, row: int):
         """Handle double-click on production item (finished products)"""
@@ -3113,15 +3403,54 @@ Détails individuels:"""
                         production_date = dt.now().date()
                 else:
                     production_date = dt.now().date()
+
+                # Check if a production batch with same characteristics already exists
+                # Same characteristics: same client_order_id (which includes client and dimensions)
+                existing_batch = session.query(ProductionBatch).filter(
+                    ProductionBatch.client_order_id == client_order_id
+                ).first()
                 
-                production_batch = ProductionBatch(
-                    client_order_id=client_order_id,
-                    batch_code=data['batch_code'],
-                    quantity=data['quantity_produced'],  # Store produced quantity, not used quantity
-                    production_date=production_date
-                )
-                
-                session.add(production_batch)
+                if existing_batch:
+                    # Add quantity to existing batch instead of creating new one
+                    old_quantity = existing_batch.quantity
+                    existing_batch.quantity += data['quantity_produced']
+                    
+                    print(f"DEBUG: Found existing batch {existing_batch.batch_code}")
+                    print(f"DEBUG: Adding {data['quantity_produced']} to existing quantity {old_quantity}")
+                    print(f"DEBUG: New total quantity: {existing_batch.quantity}")
+                    
+                    QMessageBox.information(
+                        self, 
+                        "Quantité ajoutée", 
+                        f"Quantité ajoutée au lot existant!\n"
+                        f"Lot: {existing_batch.batch_code}\n"
+                        f"Ancienne quantité: {old_quantity}\n"
+                        f"Nouvelle quantité: {existing_batch.quantity}\n"
+                        f"Quantité ajoutée: {data['quantity_produced']}"
+                    )
+                    
+                    production_batch = existing_batch
+                else:
+                    # Create new production batch
+                    production_batch = ProductionBatch(
+                        client_order_id=client_order_id,
+                        batch_code=data['batch_code'],
+                        quantity=data['quantity_produced'],  # Store produced quantity, not used quantity
+                        production_date=production_date
+                    )
+                    
+                    session.add(production_batch)
+                    
+                    print(f"DEBUG: Created new production batch {data['batch_code']}")
+                    print(f"DEBUG: Initial quantity: {data['quantity_produced']}")
+                    
+                    QMessageBox.information(
+                        self, 
+                        "Lot créé", 
+                        f"Nouveau lot de production créé!\n"
+                        f"Code de lot: {data['batch_code']}\n"
+                        f"Quantité: {data['quantity_produced']}"
+                    )
                 
                 # Update raw material quantities
                 quantity_remaining = data['quantity_used']
@@ -3168,12 +3497,6 @@ Détails individuels:"""
                 # Clear any cached objects to ensure fresh data
                 session.expunge_all()
                 print(f"DEBUG: Session expunged")
-                
-                QMessageBox.information(
-                    self, 
-                    "Succès", 
-                    f"Produit fini créé avec succès!\nCode de lot: {data['batch_code']}"
-                )
                 
                 # Refresh both grids
                 self.refresh_all()
@@ -3234,9 +3557,35 @@ Détails individuels:"""
         import re
         id_field = row_data[0]
         
-        # Check if it's a merged format
+        # Check if it's a comma-separated format (new grouping system)
+        if ',' in id_field:
+            ids_str = [id_str.strip() for id_str in id_field.split(',')]
+            try:
+                batch_ids = [int(id_str) for id_str in ids_str]
+            except ValueError:
+                QMessageBox.warning(self, "Erreur", "Format d'ID invalide dans les éléments groupés.")
+                return
+            
+            reply = QMessageBox.question(
+                self,
+                "Supprimer les lots groupés",
+                f"Voulez-vous supprimer tous les {len(batch_ids)} lots de production groupés ?\n\n"
+                f"IDs concernés : {', '.join(ids_str)}\n"
+                f"Client : {row_data[1] if len(row_data) > 1 else 'N/A'}\n"
+                f"Dimensions : {row_data[2] if len(row_data) > 2 else 'N/A'}\n"
+                f"Quantité totale : {row_data[3] if len(row_data) > 3 else 'N/A'}\n\n"
+                f"Cette action est irréversible.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self._delete_multiple_production_ids(batch_ids)
+            return
+        
+        # Check if it's the old merged format
         if re.match(r'^\d+-\d+ \(\d+\)$', id_field):
-            # Extract all IDs from merged format
+            # Extract all IDs from old merged format
             range_match = re.match(r'^(\d+)-(\d+) \((\d+)\)$', id_field)
             if range_match:
                 start_id = int(range_match.group(1))
@@ -3342,7 +3691,23 @@ Détails individuels:"""
         import re
         id_field = row_data[0]
         
-        # Check if it's a merged format
+        # Check if it's a comma-separated format (new grouping system)
+        if ',' in id_field:
+            ids = [id_str.strip() for id_str in id_field.split(',')]
+            QMessageBox.information(
+                self, 
+                "Éléments groupés", 
+                f"Cette ligne représente {len(ids)} lots de production groupés:\n\n"
+                f"IDs: {', '.join(ids)}\n"
+                f"Client: {row_data[1] if len(row_data) > 1 else 'N/A'}\n"
+                f"Dimensions: {row_data[2] if len(row_data) > 2 else 'N/A'}\n"
+                f"Quantité totale: {row_data[3] if len(row_data) > 3 else 'N/A'}\n\n"
+                "Pour voir les détails d'un lot spécifique, vous pouvez utiliser "
+                "le menu de recherche ou filtrer les données."
+            )
+            return
+        
+        # Check if it's the old merged format
         if re.match(r'^\d+-\d+ \(\d+\)$', id_field):
             QMessageBox.information(
                 self, 
@@ -3632,7 +3997,8 @@ Détails individuels:"""
                 # Get client order with quotation and client data eagerly loaded
                 client_order = session.query(ClientOrder).options(
                     joinedload(ClientOrder.quotation).joinedload(Quotation.line_items),
-                    joinedload(ClientOrder.supplier_order)
+                    joinedload(ClientOrder.supplier_order),
+                    joinedload(ClientOrder.client)
                 ).filter(ClientOrder.id == first_batch.client_order_id).first()
                 
                 if not client_order:
@@ -3654,17 +4020,47 @@ Détails individuels:"""
                             'email': getattr(line_item.client, 'email', '')
                         }
                 
-                # Get the designation from quotation line items if available
+                # Fallback: Use direct client relationship if supplier order client not available
+                if not client_details and client_order.client:
+                    client_details = {
+                        'name': client_order.client.name,
+                        'address': getattr(client_order.client, 'address', ''),
+                        'phone': getattr(client_order.client, 'phone', ''),
+                        'email': getattr(client_order.client, 'email', '')
+                    }
+                
+                # Get the designation from quotation line items if available (PRIORITY)
                 designation_from_quotation = ""
+                
                 if client_order and client_order.quotation and client_order.quotation.line_items:
                     # Use the first quotation line item description as the designation
                     quotation_line_item = client_order.quotation.line_items[0]
                     if quotation_line_item.description:
                         designation_from_quotation = quotation_line_item.description
+                        print(f"DEBUG Delivery Note: Found quotation description: '{designation_from_quotation}'")
                 
-                # Create delivery item with merged data
+                # Fallback: Look for most recent quotation for the same client if no direct quotation link
+                if not designation_from_quotation and client_order and client_order.client:
+                    from models.orders import Quotation, QuotationLineItem
+                    from sqlalchemy import desc
+                    most_recent_quotation = session.query(Quotation).filter(
+                        Quotation.client_id == client_order.client.id
+                    ).order_by(desc(Quotation.issue_date)).first()
+                    
+                    if most_recent_quotation and most_recent_quotation.line_items:
+                        quotation_line_item = most_recent_quotation.line_items[0]
+                        if quotation_line_item.description:
+                            designation_from_quotation = quotation_line_item.description
+                            print(f"DEBUG Delivery Note: Found recent quotation description: '{designation_from_quotation}'")
+                
+                # Final fallback to auto-generated description if no quotation found
+                if not designation_from_quotation:
+                    designation_from_quotation = f"Cartons {row_data[2]}" if len(row_data) > 2 else "Cartons"
+                    print(f"DEBUG Delivery Note: Using fallback description: '{designation_from_quotation}'")
+                
+                # Create delivery item with quotation description (consistent with invoice)
                 delivery_items = [{
-                    'description': designation_from_quotation if designation_from_quotation else (f"Cartons {row_data[2]}" if len(row_data) > 2 else "Cartons"),
+                    'description': designation_from_quotation,
                     'quantity': total_quantity,
                     'unit_price': 0.0,  # Will be calculated if needed
                     'batch_ids': batch_ids,
@@ -3837,6 +4233,18 @@ Détails individuels:"""
                             # Get designation from quotation description
                             if line_item.description:
                                 quotation_designation = line_item.description
+                        elif client_order.client:
+                            # Fallback: Look for most recent quotation for the same client
+                            most_recent_quotation = session.query(Quotation).filter(
+                                Quotation.client_id == client_order.client.id
+                            ).order_by(Quotation.issue_date.desc()).first()
+                            
+                            if most_recent_quotation and most_recent_quotation.line_items:
+                                line_item = most_recent_quotation.line_items[0]
+                                if line_item.description:
+                                    quotation_designation = line_item.description
+                                if line_item.length_mm and line_item.width_mm and line_item.height_mm:
+                                    box_dimensions = f"{line_item.length_mm}×{line_item.width_mm}×{line_item.height_mm}"
                         
                         # Use quotation description as designation, fallback to generic description
                         designation = quotation_designation if quotation_designation else f"Caisse {client_order.reference}"
