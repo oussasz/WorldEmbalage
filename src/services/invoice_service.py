@@ -50,12 +50,29 @@ class InvoiceService:
             if not productions:
                 raise ValueError("No production batches found")
             
-            # Get client information from the first production's client order
+            # Get client information using robust client detection
             first_production = productions[0]
             if not first_production.client_order:
                 raise ValueError("No client order found for production batch")
             
-            client = first_production.client_order.client
+            # Try to get client with priority: supplier order line item -> client order
+            client = None
+            client_order = first_production.client_order
+            
+            # Priority 1: Check supplier order line item for client (most accurate)
+            if client_order.supplier_order_id:
+                from models.orders import SupplierOrderLineItem
+                supplier_line_item = self.session.query(SupplierOrderLineItem).filter(
+                    SupplierOrderLineItem.supplier_order_id == client_order.supplier_order_id
+                ).first()
+                
+                if supplier_line_item and supplier_line_item.client_id:
+                    client = self.session.query(Client).filter(Client.id == supplier_line_item.client_id).first()
+            
+            # Priority 2: Fallback to client order client_id
+            if not client and client_order.client_id:
+                client = self.session.query(Client).filter(Client.id == client_order.client_id).first()
+            
             if not client:
                 raise ValueError("No client found for production batch")
             

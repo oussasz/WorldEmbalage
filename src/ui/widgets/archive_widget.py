@@ -102,8 +102,8 @@ class ArchiveStatsWidget(QWidget):
         layout.addWidget(value_label)
         layout.addWidget(title_label)
         
-        # Store value label for updates
-        card.value_label = value_label
+        # Store value label for updates using setProperty
+        card.setProperty("value_label", value_label)
         
         return card
     
@@ -287,93 +287,21 @@ class ArchiveWidget(QWidget):
         
         layout.addLayout(header_layout)
         
-        # Main content splitter
-        main_splitter = QSplitter(Qt.Orientation.Horizontal)
-        
-        # Left side: Statistics
-        stats_scroll = QScrollArea()
-        self.stats_widget = ArchiveStatsWidget()
-        stats_scroll.setWidget(self.stats_widget)
-        stats_scroll.setWidgetResizable(True)
-        stats_scroll.setMaximumWidth(400)
-        main_splitter.addWidget(stats_scroll)
-        
-        # Right side: Archive data tabs
+        # Archive data tabs (no statistics)
         self.tab_widget = QTabWidget()
         self._create_archive_tabs()
-        main_splitter.addWidget(self.tab_widget)
-        
-        # Set splitter proportions
-        main_splitter.setSizes([300, 800])
-        
-        layout.addWidget(main_splitter)
+        layout.addWidget(self.tab_widget)
     
     def _create_archive_tabs(self):
-        """Create tabs for different types of archived data"""
-        # Quotations tab
-        self.quotations_table = ArchiveTableWidget([
-            "ID", "Reference", "Client", "Date Emission", "Date Validité", 
-            "Montant Total", "Description", "Date Archivage"
+        """Create unified archive table for archived transactions"""
+        # Single unified archive table
+        self.archive_table = ArchiveTableWidget([
+            "ID", "Client", "Description", "Caisse Dimensions", "Plaque Dimensions", 
+            "Prix Achat Plaque", "Prix Vente Caisse", "Date Livraison", "Facture Générée", "Date Archivage"
         ])
-        self.quotations_table.setObjectName("quotation")
-        self.quotations_table.itemRestoreRequested.connect(self._handle_restore_request)
-        self.tab_widget.addTab(self.quotations_table, "📋 Quotations")
-        
-        # Client Orders tab
-        self.client_orders_table = ArchiveTableWidget([
-            "ID", "Reference", "Client", "Date Commande", "Statut", 
-            "Montant Total", "Quotation", "Date Archivage"
-        ])
-        self.client_orders_table.setObjectName("client_order")
-        self.client_orders_table.itemRestoreRequested.connect(self._handle_restore_request)
-        self.tab_widget.addTab(self.client_orders_table, "📦 Commandes Clients")
-        
-        # Production Batches tab
-        self.production_table = ArchiveTableWidget([
-            "ID", "Code Lot", "Client", "Dimensions", "Quantité", 
-            "Date Production", "Commande Client", "Date Archivage"
-        ])
-        self.production_table.setObjectName("production_batch")
-        self.production_table.itemRestoreRequested.connect(self._handle_restore_request)
-        self.tab_widget.addTab(self.production_table, "🏭 Production")
-        
-        # Supplier Orders tab
-        self.supplier_orders_table = ArchiveTableWidget([
-            "ID", "Reference", "Fournisseur", "Date Commande", "Statut",
-            "Clients", "Date Archivage"
-        ])
-        self.supplier_orders_table.setObjectName("supplier_order")
-        self.supplier_orders_table.itemRestoreRequested.connect(self._handle_restore_request)
-        self.tab_widget.addTab(self.supplier_orders_table, "🏪 Cmd. Fournisseurs")
-        
-        # Workflow Timeline tab
-        self.timeline_widget = self._create_timeline_widget()
-        self.tab_widget.addTab(self.timeline_widget, "🔄 Timeline")
-    
-    def _create_timeline_widget(self):
-        """Create workflow timeline widget"""
-        widget = QWidget()
-        layout = QVBoxLayout(widget)
-        
-        # Search and filter controls
-        filter_layout = QHBoxLayout()
-        filter_layout.addWidget(QLabel("Search:"))
-        
-        self.timeline_search = QLineEdit()
-        self.timeline_search.setPlaceholderText("Search by client, reference, or description...")
-        self.timeline_search.textChanged.connect(self._filter_timeline)
-        filter_layout.addWidget(self.timeline_search)
-        
-        layout.addLayout(filter_layout)
-        
-        # Timeline table
-        self.timeline_table = ArchiveTableWidget([
-            "Archive Date", "Workflow ID", "Client", "Type", "Reference", 
-            "Description", "Value", "Status"
-        ])
-        layout.addWidget(self.timeline_table)
-        
-        return widget
+        self.archive_table.setObjectName("archived_transaction")
+        self.archive_table.itemRestoreRequested.connect(self._handle_restore_request)
+        self.tab_widget.addTab(self.archive_table, "📦 Archived Transactions")
     
     def _setup_refresh_timer(self):
         """Setup automatic refresh timer"""
@@ -384,245 +312,132 @@ class ArchiveWidget(QWidget):
     def refresh_all_data(self):
         """Refresh all archive data"""
         try:
-            self.stats_widget.refresh_stats()
-            self._load_archived_quotations()
-            self._load_archived_client_orders()
-            self._load_archived_production_batches()
-            self._load_archived_supplier_orders()
-            self._load_workflow_timeline()
+            self._load_archived_transactions()
         except Exception as e:
             print(f"Error refreshing archive data: {e}")
             traceback.print_exc()
     
-    def _load_archived_quotations(self):
-        """Load archived quotations"""
+    def _load_archived_transactions(self):
+        """Load unified archived transactions combining all workflow data"""
         try:
             session = SessionLocal()
             try:
-                quotations = session.query(Quotation).filter(
-                    Quotation.notes.like('[ARCHIVED]%')
-                ).join(Quotation.client).all()
-                
-                data = []
-                for q in quotations:
-                    # Extract archive date from notes
-                    archive_date = self._extract_archive_date(q.notes)
-                    
-                    # Get description from line items or notes
-                    description = "N/A"
-                    if q.line_items:
-                        descriptions = [li.description for li in q.line_items if li.description]
-                        if descriptions:
-                            description = descriptions[0]
-                    if description == "N/A" and q.notes:
-                        # Extract description from notes (excluding archive marker)
-                        clean_notes = q.notes.replace('[ARCHIVED]', '').strip()
-                        if clean_notes:
-                            description = clean_notes[:50] + "..." if len(clean_notes) > 50 else clean_notes
-                    
-                    data.append([
-                        str(q.id),
-                        q.reference or "N/A",
-                        q.client.name if q.client else "N/A",
-                        str(q.issue_date) if q.issue_date else "N/A",
-                        str(q.valid_until) if q.valid_until else "N/A",
-                        f"{q.total_amount:,.2f} {q.currency}" if q.total_amount else "0.00",
-                        description,
-                        archive_date
-                    ])
-                
-                self.quotations_table.load_data(data)
-                
-            finally:
-                session.close()
-        except Exception as e:
-            print(f"Error loading archived quotations: {e}")
-    
-    def _load_archived_client_orders(self):
-        """Load archived client orders"""
-        try:
-            session = SessionLocal()
-            try:
-                client_orders = session.query(ClientOrder).filter(
-                    ClientOrder.notes.like('[ARCHIVED]%')
-                ).join(ClientOrder.client).all()
-                
-                data = []
-                for co in client_orders:
-                    archive_date = self._extract_archive_date(co.notes)
-                    
-                    # Get quotation reference
-                    quotation_ref = "N/A"
-                    if co.quotation:
-                        quotation_ref = co.quotation.reference
-                    
-                    data.append([
-                        str(co.id),
-                        co.reference or "N/A",
-                        co.client.name if co.client else "N/A",
-                        str(co.order_date) if co.order_date else "N/A",
-                        co.status.value if co.status else "N/A",
-                        f"{co.total_amount:,.2f}" if co.total_amount else "0.00",
-                        quotation_ref,
-                        archive_date
-                    ])
-                
-                self.client_orders_table.load_data(data)
-                
-            finally:
-                session.close()
-        except Exception as e:
-            print(f"Error loading archived client orders: {e}")
-    
-    def _load_archived_production_batches(self):
-        """Load archived production batches"""
-        try:
-            session = SessionLocal()
-            try:
+                # Get archived production batches as the main driver
                 production_batches = session.query(ProductionBatch).filter(
                     ProductionBatch.batch_code.like('[ARCHIVED]%')
                 ).all()
                 
                 data = []
                 for pb in production_batches:
-                    # Extract archive date from batch_code
-                    archive_date = self._extract_archive_date_from_batch_code(pb.batch_code)
-                    
-                    # Get client and dimensions info
-                    client_name = "N/A"
-                    dimensions = "N/A"
-                    client_order_ref = "N/A"
-                    
-                    if pb.client_order_id:
-                        client_order = session.query(ClientOrder).filter(
-                            ClientOrder.id == pb.client_order_id
-                        ).first()
+                    try:
+                        # Get client order and related information
+                        client_name = "N/A"
+                        description = "N/A"
+                        caisse_dimensions = "N/A"
+                        plaque_dimensions = "N/A"
+                        prix_achat_plaque = "N/A"
+                        prix_vente_caisse = "N/A"
+                        date_livraison = "N/A"
+                        facture_generee = "Non"
+                        archive_date = self._extract_archive_date_from_batch_code(pb.batch_code)
                         
-                        if client_order:
-                            client_order_ref = client_order.reference
-                            if client_order.client:
-                                client_name = client_order.client.name
+                        # Get description (priority: production batch -> quotation -> generated)
+                        description = "N/A"
+                        
+                        # First priority: Check production batch description
+                        if hasattr(pb, 'description') and pb.description and pb.description.strip():
+                            description = pb.description.strip()
+                        
+                        # Second priority: Get from client order quotation if batch description not available
+                        if description == "N/A" and pb.client_order_id:
+                            client_order = session.query(ClientOrder).filter(
+                                ClientOrder.id == pb.client_order_id
+                            ).first()
+                            
+                            if client_order:
+                                # Client
+                                if client_order.client:
+                                    client_name = client_order.client.name
                                 
-                            # Get dimensions from quotation
-                            if client_order.quotation and client_order.quotation.line_items:
-                                line_item = client_order.quotation.line_items[0]
-                                if line_item.length_mm and line_item.width_mm and line_item.height_mm:
-                                    dimensions = f"{line_item.length_mm}×{line_item.width_mm}×{line_item.height_mm}"
-                    
-                    # Clean batch code for display
-                    clean_batch_code = pb.batch_code.replace('[ARCHIVED]', '').strip()
-                    
-                    data.append([
-                        str(pb.id),
-                        clean_batch_code,
-                        client_name,
-                        dimensions,
-                        str(pb.quantity or 0),
-                        str(pb.production_date) if pb.production_date else "N/A",
-                        client_order_ref,
-                        archive_date
-                    ])
-                
-                self.production_table.load_data(data)
-                
-            finally:
-                session.close()
-        except Exception as e:
-            print(f"Error loading archived production batches: {e}")
-    
-    def _load_archived_supplier_orders(self):
-        """Load archived supplier orders"""
-        try:
-            session = SessionLocal()
-            try:
-                supplier_orders = session.query(SupplierOrder).filter(
-                    SupplierOrder.notes.like('[ARCHIVED]%')
-                ).join(SupplierOrder.supplier).all()
-                
-                data = []
-                for so in supplier_orders:
-                    archive_date = self._extract_archive_date(so.notes)
-                    
-                    # Get clients served by this supplier order
-                    clients = set()
-                    if hasattr(so, 'line_items') and so.line_items:
-                        for item in so.line_items:
-                            if hasattr(item, 'client') and item.client:
-                                clients.add(item.client.name)
-                    
-                    clients_str = ", ".join(sorted(clients)) if clients else "N/A"
-                    
-                    data.append([
-                        str(so.id),
-                        so.reference or so.bon_commande_ref or "N/A",
-                        so.supplier.name if so.supplier else "N/A",
-                        str(so.order_date) if so.order_date else "N/A",
-                        so.status.value if so.status else "N/A",
-                        clients_str,
-                        archive_date
-                    ])
-                
-                self.supplier_orders_table.load_data(data)
-                
-            finally:
-                session.close()
-        except Exception as e:
-            print(f"Error loading archived supplier orders: {e}")
-    
-    def _load_workflow_timeline(self):
-        """Load workflow timeline showing archive progression"""
-        try:
-            session = SessionLocal()
-            try:
-                timeline_data = []
-                
-                # Get archived workflows by looking for production batches with client orders
-                production_batches = session.query(ProductionBatch).filter(
-                    ProductionBatch.batch_code.like('[ARCHIVED]%')
-                ).all()
-                
-                for pb in production_batches:
-                    if pb.client_order_id:
-                        client_order = session.query(ClientOrder).filter(
-                            ClientOrder.id == pb.client_order_id
-                        ).first()
+                                # Date de livraison (use production date)
+                                if pb.production_date:
+                                    date_livraison = str(pb.production_date)
+                                
+                                # Prix de vente (from quotation)
+                                if client_order.quotation:
+                                    quotation = client_order.quotation
+                                    if quotation.total_amount:
+                                        prix_vente_caisse = f"{quotation.total_amount:,.2f} DZD"
+                                    
+                                    # Description and dimensions from quotation line items
+                                    if quotation.line_items:
+                                        line_item = quotation.line_items[0]  # Take first item
+                                        
+                                        # Description - comprehensive approach
+                                        if line_item.description and line_item.description.strip():
+                                            description = line_item.description.strip()
+                                        elif quotation.notes and quotation.notes.strip():
+                                            # Fallback to quotation notes
+                                            clean_notes = quotation.notes.replace('[ARCHIVED]', '').strip()
+                                            if clean_notes:
+                                                description = clean_notes
+                                        else:
+                                            # Generate description from dimensions and type
+                                            if line_item.length_mm and line_item.width_mm and line_item.height_mm:
+                                                cardboard_info = line_item.cardboard_type or "Standard"
+                                                description = f"Carton {cardboard_info} {line_item.length_mm}×{line_item.width_mm}×{line_item.height_mm}mm"
+                                        
+                                        # Caisse dimensions
+                                        if line_item.length_mm and line_item.width_mm and line_item.height_mm:
+                                            caisse_dimensions = f"{line_item.length_mm}×{line_item.width_mm}×{line_item.height_mm}mm"
+                                
+                                # Prix d'achat plaque and plaque dimensions (from supplier order)
+                                if hasattr(client_order, 'supplier_order') and client_order.supplier_order:
+                                    supplier_order = client_order.supplier_order
+                                    if supplier_order.total_amount:
+                                        prix_achat_plaque = f"{supplier_order.total_amount:,.2f} DZD"
+                                    
+                                    # Get plaque dimensions from supplier order line items
+                                    if hasattr(supplier_order, 'line_items') and supplier_order.line_items:
+                                        so_line_item = supplier_order.line_items[0]  # Take first item
+                                        if hasattr(so_line_item, 'plaque_width_mm') and hasattr(so_line_item, 'plaque_length_mm'):
+                                            if so_line_item.plaque_width_mm and so_line_item.plaque_length_mm:
+                                                plaque_dimensions = f"{so_line_item.plaque_width_mm}×{so_line_item.plaque_length_mm}mm"
+                                                if hasattr(so_line_item, 'plaque_flap_mm') and so_line_item.plaque_flap_mm:
+                                                    plaque_dimensions += f" (Rabat: {so_line_item.plaque_flap_mm}mm)"
+                                
+                                # Check if invoice was generated (simplified check)
+                                if client_order.status and client_order.status.value == "terminé":
+                                    facture_generee = "Oui"
                         
-                        if client_order:
-                            archive_date = self._extract_archive_date_from_batch_code(pb.batch_code)
-                            
-                            # Calculate workflow value
-                            total_value = 0
-                            if client_order.quotation:
-                                total_value = float(client_order.quotation.total_amount or 0)
-                            
-                            # Get description
-                            description = "N/A"
-                            if client_order.quotation and client_order.quotation.line_items:
-                                line_item = client_order.quotation.line_items[0]
-                                if line_item.description:
-                                    description = line_item.description
-                            
-                            timeline_data.append([
-                                archive_date,
-                                f"WF-{pb.id}",
-                                client_order.client.name if client_order.client else "N/A",
-                                "Complete Workflow",
-                                client_order.reference or "N/A",
-                                description,
-                                f"{total_value:,.2f} DZD",
-                                "Archived"
-                            ])
+                        data.append([
+                            str(pb.id),
+                            client_name,
+                            description,
+                            caisse_dimensions,
+                            plaque_dimensions,
+                            prix_achat_plaque,
+                            prix_vente_caisse,
+                            date_livraison,
+                            facture_generee,
+                            archive_date
+                        ])
+                        
+                    except Exception as e:
+                        print(f"Error processing production batch {pb.id}: {e}")
+                        continue
                 
                 # Sort by archive date (newest first)
-                timeline_data.sort(key=lambda x: x[0], reverse=True)
+                data.sort(key=lambda x: x[9], reverse=True)
                 
-                self.timeline_table.load_data(timeline_data)
+                self.archive_table.load_data(data)
                 
             finally:
                 session.close()
         except Exception as e:
-            print(f"Error loading workflow timeline: {e}")
-    
+            print(f"Error loading archived transactions: {e}")
+            traceback.print_exc()
+
     def _extract_archive_date(self, notes: str) -> str:
         """Extract archive date from notes field"""
         if not notes or '[ARCHIVED]' not in notes:
@@ -638,22 +453,6 @@ class ArchiveWidget(QWidget):
             return "Unknown"
         
         return datetime.now().strftime('%Y-%m-%d %H:%M')
-    
-    def _filter_timeline(self):
-        """Filter timeline based on search text"""
-        search_text = self.timeline_search.text().lower()
-        
-        for row in range(self.timeline_table.rowCount()):
-            visible = False
-            
-            # Check each column for search text
-            for col in range(self.timeline_table.columnCount()):
-                item = self.timeline_table.item(row, col)
-                if item and search_text in item.text().lower():
-                    visible = True
-                    break
-            
-            self.timeline_table.setRowHidden(row, not visible)
     
     def _handle_restore_request(self, item_type: str, item_id: int):
         """Handle restore request for archived item"""
@@ -699,12 +498,38 @@ class ArchiveWidget(QWidget):
                         production_batch.batch_code = production_batch.batch_code.replace('[ARCHIVED]', '').strip()
                         success = True
                 
-                elif item_type == "supplier_order":
-                    supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == item_id).first()
-                    if supplier_order and supplier_order.notes and '[ARCHIVED]' in supplier_order.notes:
-                        supplier_order.notes = supplier_order.notes.replace('[ARCHIVED]', '').strip()
-                        if not supplier_order.notes:
-                            supplier_order.notes = None
+                elif item_type == "archived_transaction":
+                    # For archived transactions, we restore the entire workflow starting from production batch
+                    production_batch = session.query(ProductionBatch).filter(ProductionBatch.id == item_id).first()
+                    if production_batch and '[ARCHIVED]' in production_batch.batch_code:
+                        # Remove archive marker from production batch
+                        production_batch.batch_code = production_batch.batch_code.replace('[ARCHIVED]', '').strip()
+                        
+                        # Restore related client order if exists
+                        if production_batch.client_order_id:
+                            client_order = session.query(ClientOrder).filter(
+                                ClientOrder.id == production_batch.client_order_id
+                            ).first()
+                            
+                            if client_order and client_order.notes and '[ARCHIVED]' in client_order.notes:
+                                client_order.notes = client_order.notes.replace('[ARCHIVED]', '').strip()
+                                if not client_order.notes:
+                                    client_order.notes = None
+                                
+                                # Restore related quotation if exists
+                                if client_order.quotation and client_order.quotation.notes and '[ARCHIVED]' in client_order.quotation.notes:
+                                    client_order.quotation.notes = client_order.quotation.notes.replace('[ARCHIVED]', '').strip()
+                                    if not client_order.quotation.notes:
+                                        client_order.quotation.notes = None
+                                
+                                # Restore related supplier order if exists
+                                if hasattr(client_order, 'supplier_order') and client_order.supplier_order:
+                                    supplier_order = client_order.supplier_order
+                                    if supplier_order.notes and '[ARCHIVED]' in supplier_order.notes:
+                                        supplier_order.notes = supplier_order.notes.replace('[ARCHIVED]', '').strip()
+                                        if not supplier_order.notes:
+                                            supplier_order.notes = None
+                        
                         success = True
                 
                 if success:

@@ -1767,7 +1767,7 @@ class MainWindow(QMainWindow):
         finally:
             session.close()
 
-    def refresh_all(self) -> None:
+    def refresh_all(self) -> None:  # type: ignore[misc]
         """Refresh all data grids."""
         session = None
         try:

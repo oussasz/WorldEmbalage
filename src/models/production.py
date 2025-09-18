@@ -13,6 +13,7 @@ class ProductionBatch(PKMixin, TimestampMixin, Base):
     batch_code: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, index=True)
     quantity: Mapped[int] = mapped_column(Integer, default=0)
     production_date: Mapped[date | None] = mapped_column(Date())
+    description: Mapped[str | None] = mapped_column(String(255))  # Description from quotation line items
 
     # Relationship to client order
     client_order: Mapped['ClientOrder'] = relationship(back_populates='production_batches')  # type: ignore[name-defined]

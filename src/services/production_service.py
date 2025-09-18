@@ -10,17 +10,18 @@ class ProductionService:
     def __init__(self, db: Session):
         self.db = db
 
-    def create_batch(self, client_order_id: int, batch_code: str, quantity: int = 0, production_date: date | None = None) -> ProductionBatch:
+    def create_batch(self, client_order_id: int, batch_code: str, quantity: int = 0, production_date: date | None = None, description: str | None = None) -> ProductionBatch:
         batch = ProductionBatch(
             client_order_id=client_order_id, 
             batch_code=batch_code,
             quantity=quantity,
-            production_date=production_date or date.today()
+            production_date=production_date or date.today(),
+            description=description
         )
         self.db.add(batch)
         self.db.commit()
         self.db.refresh(batch)
-        logger.debug("Created production batch {} for order {} with quantity {}", batch_code, client_order_id, quantity)
+        logger.debug("Created production batch {} for order {} with quantity {} and description '{}'", batch_code, client_order_id, quantity, description or "N/A")
         return batch
 
     def update_batch(self, batch_id: int, quantity: int | None = None, production_date: date | None = None) -> ProductionBatch:
