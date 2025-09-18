@@ -2168,43 +2168,51 @@ class MainWindow(QMainWindow):
             for group_key, group in grouped_receptions.items():
                 # Get quotation description for raw materials
                 description = "N/A"
-                
+
                 # Try to get description from first reception in group
                 if group['ids']:
                     first_reception_id = group['ids'][0]
                     try:
                         reception = session.query(Reception).filter(Reception.id == first_reception_id).first()
-                        if reception and reception.supplier_order:
-                            supplier_order = reception.supplier_order
-                            
-                            # Get first line item to find client and quotation info
-                            if hasattr(supplier_order, 'line_items') and supplier_order.line_items:
-                                first_line_item = supplier_order.line_items[0]
-                                
-                                # Find client order through client_id
-                                if hasattr(first_line_item, 'client_id') and first_line_item.client_id:
-                                    # Look for client order with this client and supplier order
-                                    client_order = session.query(ClientOrder).filter(
-                                        ClientOrder.client_id == first_line_item.client_id,
-                                        ClientOrder.supplier_order_id == supplier_order.id
-                                    ).first()
-                                    
-                                    if client_order and client_order.quotation:
-                                        quotation = client_order.quotation
-                                        
-                                        # Try line items first (priority)
-                                        if quotation.line_items:
-                                            first_quotation_line = quotation.line_items[0]
-                                            if first_quotation_line.description:
-                                                description = first_quotation_line.description
-                                        
-                                        # Fallback to quotation notes
-                                        if description == "N/A" and quotation.notes:
-                                            description = quotation.notes
-                                    
+                        if reception:
+                            # If arrival logic already stored a meaningful description in notes, prefer it
+                            if reception.notes and reception.notes.strip() and not reception.notes.startswith("Arrivée matière:"):
+                                description = reception.notes.strip()
+
+                            if description == "N/A" and reception.supplier_order:
+                                supplier_order = reception.supplier_order
+
+                                # Get first line item to find client and quotation info
+                                if hasattr(supplier_order, 'line_items') and supplier_order.line_items:
+                                    first_line_item = supplier_order.line_items[0]
+
+                                    # Use flexible client-based lookup: ANY client order for this client having a quotation
+                                    if hasattr(first_line_item, 'client_id') and first_line_item.client_id:
+                                        client_orders = session.query(ClientOrder).filter(
+                                            ClientOrder.client_id == first_line_item.client_id,
+                                            ClientOrder.quotation_id.isnot(None)
+                                        ).all()
+
+                                        for client_order in client_orders:
+                                            if client_order.quotation:
+                                                quotation = client_order.quotation
+
+                                                # Search all line items for first non-empty description
+                                                if quotation.line_items:
+                                                    for q_line in quotation.line_items:
+                                                        if q_line.description and q_line.description.strip():
+                                                            description = q_line.description.strip()
+                                                            break
+
+                                                # Fallback to quotation notes if still not found
+                                                if description == "N/A" and quotation.notes and quotation.notes.strip():
+                                                    description = quotation.notes.strip()
+
+                                                if description != "N/A":
+                                                    break  # Stop once we have a description
                     except Exception as e:
                         print(f"Error fetching description for reception {first_reception_id}: {e}")
-                        description = "N/A"
+                        # Keep description as N/A if failure
                 
                 receptions_data.append([
                     ",".join(map(str, group['ids'])),  # Store all IDs for context menu
@@ -2298,29 +2306,54 @@ class MainWindow(QMainWindow):
                     
                     # Get quotation description for finished products
                     description = "N/A"
-                    
-                    # Try to get description from client order -> quotation
-                    if pb.client_order_id:
-                        try:
-                            client_order = session.query(ClientOrder).filter(
-                                ClientOrder.id == pb.client_order_id
-                            ).first()
-                            
-                            if client_order and client_order.quotation:
-                                quotation = client_order.quotation
-                                
-                                # Try line items first (priority)
-                                if quotation.line_items:
-                                    first_quotation_line = quotation.line_items[0]
-                                    if first_quotation_line.description:
-                                        description = first_quotation_line.description
-                                
-                                # Fallback to quotation notes
-                                if description == "N/A" and quotation.notes:
-                                    description = quotation.notes
-                                    
-                        except Exception as desc_error:
-                            print(f"Error fetching description for production batch {pb.id}: {desc_error}")
+
+                    # Priority 0: Stored description on production batch (persisted at creation)
+                    if hasattr(pb, 'description') and pb.description and pb.description.strip():
+                        description = pb.description.strip()
+                    else:
+                        # Try to get description from client order -> quotation (direct link)
+                        if pb.client_order_id:
+                            try:
+                                client_order = session.query(ClientOrder).filter(
+                                    ClientOrder.id == pb.client_order_id
+                                ).first()
+
+                                if client_order and client_order.quotation:
+                                    quotation = client_order.quotation
+
+                                    # Try all line items to find first non-empty description
+                                    if quotation.line_items:
+                                        for ql in quotation.line_items:
+                                            if ql.description and ql.description.strip():
+                                                description = ql.description.strip()
+                                                break
+
+                                    # Fallback to quotation notes
+                                    if description == "N/A" and quotation.notes and quotation.notes.strip():
+                                        description = quotation.notes.strip()
+
+                                # FLEXIBLE FALLBACK: search other client orders for same client if still N/A
+                                if description == "N/A" and client_id:
+                                    related_orders = session.query(ClientOrder).filter(
+                                        ClientOrder.client_id == client_id,
+                                        ClientOrder.quotation_id.isnot(None)
+                                    ).all()
+                                    for co in related_orders:
+                                        if co.quotation:
+                                            q = co.quotation
+                                            # Prefer line items
+                                            if q.line_items:
+                                                for ql in q.line_items:
+                                                    if ql.description and ql.description.strip():
+                                                        description = ql.description.strip()
+                                                        break
+                                            if description != "N/A":
+                                                break
+                                            if q.notes and q.notes.strip():
+                                                description = q.notes.strip()
+                                                break
+                            except Exception as desc_error:
+                                print(f"Error fetching description for production batch {pb.id}: {desc_error}")
                     
                     # Format production date
                     production_date = "N/A"
@@ -2875,9 +2908,8 @@ class MainWindow(QMainWindow):
             f'Client: {client_name}\n'
             f'Dimensions: {dimensions}\n'
             f'Quantité: {quantity}\n\n'
-            f'Cette action déplacera toutes les données associées '
-            f'(devis, commandes matières premières, etc.) vers l\'archive '
-            f'et les masquera du flux de travail actif.\n\n'
+            f'Cette action déplacera SEULEMENT ce produit fini vers l\'archive.\n'
+            f'Les matières premières, devis et commandes associés resteront actifs.\n\n'
             f'Cette action peut être annulée depuis l\'onglet Archive.',
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No
@@ -2899,59 +2931,15 @@ class MainWindow(QMainWindow):
             
             archived_items = []
             
-            # For each production batch, trace back and mark related items as archived
+            # Archive ONLY the production batches themselves (no cascading)
             for pb in production_batches:
                 # Mark production batch as archived by modifying batch_code
-                archive_marker = f"[ARCHIVED]"
-                
-                # Mark production batch as archived by adding to batch_code
                 if not pb.batch_code.startswith("[ARCHIVED]"):
                     pb.batch_code = f"[ARCHIVED] {pb.batch_code}"
                 
-                archived_items.append(f"Production batch {pb.id} ({pb.batch_code})")
-                
-                # Mark related client order as archived if it exists
-                if pb.client_order_id:
-                    client_order = session.query(ClientOrder).filter(
-                        ClientOrder.id == pb.client_order_id
-                    ).first()
-                    
-                    if client_order:
-                        # Mark client order as archived in notes
-                        if hasattr(client_order, 'notes'):
-                            if client_order.notes:
-                                if "[ARCHIVED" not in client_order.notes:
-                                    client_order.notes = f"{archive_marker} {client_order.notes}"
-                            else:
-                                client_order.notes = archive_marker
-                        
-                        archived_items.append(f"Client order {client_order.reference}")
-                        
-                        # Mark related quotation as archived
-                        if hasattr(client_order, 'quotation') and client_order.quotation:
-                            quotation = client_order.quotation
-                            if hasattr(quotation, 'notes'):
-                                if quotation.notes:
-                                    if "[ARCHIVED" not in quotation.notes:
-                                        quotation.notes = f"{archive_marker} {quotation.notes}"
-                                else:
-                                    quotation.notes = archive_marker
-                            
-                            archived_items.append(f"Quotation {quotation.reference}")
-                        
-                        # Mark related supplier order as archived
-                        if hasattr(client_order, 'supplier_order') and client_order.supplier_order:
-                            supplier_order = client_order.supplier_order
-                            if hasattr(supplier_order, 'notes'):
-                                if supplier_order.notes:
-                                    if "[ARCHIVED" not in supplier_order.notes:
-                                        supplier_order.notes = f"{archive_marker} {supplier_order.notes}"
-                                else:
-                                    supplier_order.notes = archive_marker
-                            
-                            archived_items.append(f"Supplier order {supplier_order.reference}")
+                archived_items.append(f"Produit fini: {pb.batch_code}")
             
-            # Commit the changes
+            # Commit the changes (only production batches are archived)
             session.commit()
             
             # Show success message with summary
@@ -2959,9 +2947,8 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 'Archivage terminé',
-                f'Les éléments suivants ont été archivés avec succès :\n\n{archived_summary}\n\n'
-                f'Ces données sont maintenant masquées du flux de travail actif '
-                f'mais restent accessibles dans l\'onglet Archive.'
+                f'Les produits finis suivants ont été archivés :\n\n{archived_summary}\n\n'
+                f'Les matières premières, devis et commandes associés restent actifs et disponibles.'
             )
             
             # Refresh the grids to hide archived items
@@ -3414,6 +3401,38 @@ Détails individuels:"""
                     # Add quantity to existing batch instead of creating new one
                     old_quantity = existing_batch.quantity
                     existing_batch.quantity += data['quantity_produced']
+
+                    # Populate description if missing
+                    if (not existing_batch.description) or (not existing_batch.description.strip()):
+                        try:
+                            # Attempt to derive description from any quotation for same client
+                            from models.orders import ClientOrder, Quotation, QuotationLineItem
+                            line_client_id = line_item.client_id
+                            related_orders = session.query(ClientOrder).filter(
+                                ClientOrder.client_id == line_client_id,
+                                ClientOrder.quotation_id.isnot(None)
+                            ).all()
+                            derived_description = None
+                            for co in related_orders:
+                                if co.quotation and co.quotation.line_items:
+                                    for ql in co.quotation.line_items:
+                                        if ql.description and ql.description.strip():
+                                            derived_description = ql.description.strip()
+                                            break
+                                    if derived_description:
+                                        break
+                                if (not derived_description) and co.quotation and co.quotation.notes and co.quotation.notes.strip():
+                                    derived_description = co.quotation.notes.strip()
+                            # Fallback to any reception note used
+                            if (not derived_description) and material_data.get('receptions'):
+                                for r in material_data['receptions']:
+                                    if r.notes and r.notes.strip() and not r.notes.startswith("Arrivée matière:"):
+                                        derived_description = r.notes.strip()
+                                        break
+                            if derived_description:
+                                existing_batch.description = derived_description[:255]
+                        except Exception as desc_pop_err:
+                            print(f"Warning: could not populate existing batch description: {desc_pop_err}")
                     
                     print(f"DEBUG: Found existing batch {existing_batch.batch_code}")
                     print(f"DEBUG: Adding {data['quantity_produced']} to existing quantity {old_quantity}")
@@ -3432,11 +3451,40 @@ Détails individuels:"""
                     production_batch = existing_batch
                 else:
                     # Create new production batch
+                    # Derive description prior to creation
+                    derived_description = None
+                    try:
+                        from models.orders import ClientOrder, Quotation, QuotationLineItem
+                        line_client_id = line_item.client_id
+                        related_orders = session.query(ClientOrder).filter(
+                            ClientOrder.client_id == line_client_id,
+                            ClientOrder.quotation_id.isnot(None)
+                        ).all()
+                        for co in related_orders:
+                            if co.quotation and co.quotation.line_items:
+                                for ql in co.quotation.line_items:
+                                    if ql.description and ql.description.strip():
+                                        derived_description = ql.description.strip()
+                                        break
+                                if derived_description:
+                                    break
+                            if (not derived_description) and co.quotation and co.quotation.notes and co.quotation.notes.strip():
+                                derived_description = co.quotation.notes.strip()
+                        # Fallback: notes from receptions used (first meaningful)
+                        if (not derived_description) and material_data.get('receptions'):
+                            for r in material_data['receptions']:
+                                if r.notes and r.notes.strip() and not r.notes.startswith("Arrivée matière:"):
+                                    derived_description = r.notes.strip()
+                                    break
+                    except Exception as pre_desc_err:
+                        print(f"Warning: could not derive production batch description: {pre_desc_err}")
+
                     production_batch = ProductionBatch(
                         client_order_id=client_order_id,
                         batch_code=data['batch_code'],
-                        quantity=data['quantity_produced'],  # Store produced quantity, not used quantity
-                        production_date=production_date
+                        quantity=data['quantity_produced'],
+                        production_date=production_date,
+                        description=(derived_description[:255] if derived_description else None)
                     )
                     
                     session.add(production_batch)

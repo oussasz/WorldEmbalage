@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
 from config.database import SessionLocal
-from models.orders import Reception, Quotation, SupplierOrder, SupplierOrderLineItem, MaterialDelivery, DeliveryStatus, SupplierOrderStatus
+from models.orders import Reception, Quotation, SupplierOrder, SupplierOrderLineItem, MaterialDelivery, DeliveryStatus, SupplierOrderStatus, ClientOrder
 from services.delivery_tracking_service import DeliveryTrackingService
 from models.suppliers import Supplier
 from models.plaques import Plaque
@@ -478,10 +478,49 @@ class RawMaterialArrivalDialog(QDialog):
 
                 # Create a single Reception per (supplier_order_id, dimensions)
                 for (supplier_order_id, w, h, r), qty in reception_aggregates.items():
+                    # Get description from related quotation
+                    description = f"Arrivée matière: {w}x{h}x{r}mm"  # Default fallback
+                    
+                    try:
+                        # Find supplier order and get description from related quotation
+                        supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == supplier_order_id).first()
+                        if supplier_order and hasattr(supplier_order, 'line_items') and supplier_order.line_items:
+                            first_line_item = supplier_order.line_items[0]
+                            
+                            # Find client order through client_id
+                            if hasattr(first_line_item, 'client_id') and first_line_item.client_id:
+                                # Look for ANY client order for this client that has a quotation with descriptions
+                                # We need to be flexible since supplier_order_id linking isn't always consistent
+                                client_orders = session.query(ClientOrder).filter(
+                                    ClientOrder.client_id == first_line_item.client_id,
+                                    ClientOrder.quotation_id.isnot(None)
+                                ).all()
+                                
+                                for client_order in client_orders:
+                                    if client_order.quotation:
+                                        quotation = client_order.quotation
+                                        
+                                        # Try line items first (priority)
+                                        if quotation.line_items:
+                                            for quotation_line in quotation.line_items:
+                                                if quotation_line.description and quotation_line.description.strip():
+                                                    description = quotation_line.description.strip()
+                                                    break  # Use first non-empty description found
+                                        
+                                        # Fallback to quotation notes if no line item description found
+                                        if description == f"Arrivée matière: {w}x{h}x{r}mm" and quotation.notes and quotation.notes.strip():
+                                            description = quotation.notes.strip()
+                                        
+                                        # If we found a good description, break out of client_orders loop
+                                        if description != f"Arrivée matière: {w}x{h}x{r}mm":
+                                            break
+                    except Exception as e:
+                        print(f"Warning: Could not fetch description for supplier order {supplier_order_id}: {e}")
+                    
                     reception = Reception(
                         supplier_order_id=supplier_order_id,
                         quantity=qty,
-                        notes=f"Arrivée matière: {w}x{h}x{r}mm"
+                        notes=description
                     )
                     session.add(reception)
                 
