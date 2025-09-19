@@ -4598,9 +4598,25 @@ Détails individuels:"""
             from services.invoice_service import InvoiceService
             from services.pdf_form_filler import PDFFormFiller, PDFFillError
             
-            # Prepare invoice data
+            # Ask whether to include TVA
+            from PyQt6.QtWidgets import QMessageBox as _QMessageBox
+            tva_dialog = _QMessageBox(self)
+            tva_dialog.setWindowTitle('TVA')
+            tva_dialog.setText('Inclure la TVA (19%) dans la facture ?')
+            tva_dialog.setIcon(_QMessageBox.Icon.Question)
+            btn_with_tva = tva_dialog.addButton('Avec TVA', _QMessageBox.ButtonRole.YesRole)
+            btn_without_tva = tva_dialog.addButton('Sans TVA', _QMessageBox.ButtonRole.NoRole)
+            tva_dialog.addButton(_QMessageBox.StandardButton.Cancel)
+            tva_dialog.exec()
+
+            clicked = tva_dialog.clickedButton()
+            if clicked == tva_dialog.button(_QMessageBox.StandardButton.Cancel):
+                return
+            include_tva = (clicked == btn_with_tva)
+
+            # Prepare invoice data with TVA choice
             with InvoiceService() as invoice_service:
-                invoice_data = invoice_service.prepare_invoice_data(production_ids)
+                invoice_data = invoice_service.prepare_invoice_data(production_ids, include_tva=include_tva)
             
             # Generate PDF invoice
             pdf_filler = PDFFormFiller()

@@ -1383,7 +1383,11 @@ class PDFFormFiller:
         
         # Table section - Invoice items table
         if 'line_items' in data and data['line_items']:
-            table_data = [["N°", "Designation", "QTE", "P/U HT", "TVA", "Total HT"]]
+            include_tva = bool(data.get('include_tva', True))
+            if include_tva:
+                table_data = [["N°", "Designation", "QTE", "P/U HT", "TVA", "Total HT"]]
+            else:
+                table_data = [["N°", "Designation", "QTE", "P/U HT", "Total HT"]]
             
             total_ht = Decimal('0')
             for idx, item in enumerate(data['line_items'], 1):
@@ -1391,19 +1395,31 @@ class PDFFormFiller:
                 quantity = int(item.get('quantity', 0))
                 line_total = unit_price * quantity
                 tva_rate = item.get('tva_rate', 19)
-                
-                table_data.append([
-                    str(idx),
-                    str(item.get('designation', '')),
-                    str(quantity),
-                    f"{unit_price:.2f}",
-                    f"{tva_rate}%",
-                    f"{line_total:.2f} DA"
-                ])
+                if include_tva:
+                    table_data.append([
+                        str(idx),
+                        str(item.get('designation', '')),
+                        str(quantity),
+                        f"{unit_price:.2f}",
+                        f"{tva_rate}%",
+                        f"{line_total:.2f} DA"
+                    ])
+                else:
+                    table_data.append([
+                        str(idx),
+                        str(item.get('designation', '')),
+                        str(quantity),
+                        f"{unit_price:.2f}",
+                        f"{line_total:.2f} DA"
+                    ])
                 total_ht += line_total
             
             # Create and style the table with professional borders
-            table = Table(table_data, colWidths=[30, 200, 50, 70, 50, 95])
+            # Choose column widths depending on TVA column presence
+            if include_tva:
+                table = Table(table_data, colWidths=[30, 200, 50, 70, 50, 95])
+            else:
+                table = Table(table_data, colWidths=[30, 220, 60, 80, 110])
             style = TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), night_blue),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -1444,19 +1460,32 @@ class PDFFormFiller:
             c.drawString(summary_x, summary_y - 40, f"Total HT Net: {total_ht_net:.2f} DA")
             
             tva_amount = data.get('tva_amount', total_ht_net * Decimal('0.19'))
-            c.drawString(summary_x, summary_y - 60, f"TVA (19%): {tva_amount:.2f} DA")
-            
-            total_ttc = data.get('total_ttc', total_ht_net + tva_amount)
-            c.drawString(summary_x, summary_y - 80, f"Total TTC: {total_ttc:.2f} DA")
-            
-            timbre = data.get('timbre', 0)
-            c.drawString(summary_x, summary_y - 100, f"TIMBRE 1%: {timbre}")
-            
+            tva_label = data.get('tva_label', 'TVA (19%)')
+            curr_y = summary_y - 60
+            if include_tva:
+                c.drawString(summary_x, curr_y, f"{tva_label}: {tva_amount:.2f} DA")
+                curr_y -= 20
+                total_ttc = data.get('total_ttc', total_ht_net + tva_amount)
+                c.drawString(summary_x, curr_y, f"Total TTC: {total_ttc:.2f} DA")
+                curr_y -= 20
+                timbre = data.get('timbre', 0)
+                try:
+                    timbre_val = Decimal(str(timbre))
+                except Exception:
+                    timbre_val = Decimal('0')
+                c.drawString(summary_x, curr_y, f"TIMBRE 1%: {timbre_val:.2f} DA")
+                curr_y -= 30
+            else:
+                # Without TVA, skip TVA and TIMBRE rows entirely and compute TTC inline
+                total_ttc = data.get('total_ttc', total_ht_net)
+                c.drawString(summary_x, curr_y, f"Total TTC: {total_ttc:.2f} DA")
+                curr_y -= 30
+
             # Total TTC NET - bold, night blue highlight
             c.setFont("Helvetica-Bold", 12)
             c.setFillColor(night_blue)
             total_ttc_net = data.get('total_ttc_net', total_ttc)
-            c.drawString(summary_x, summary_y - 130, f"Total TTC NET: {total_ttc_net:.2f} DA")
+            c.drawString(summary_x, curr_y - 20, f"Total TTC NET: {total_ttc_net:.2f} DA")
             
             # Reset color for footer
             c.setFillColor(colors.black)

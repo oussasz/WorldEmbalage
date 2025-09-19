@@ -26,7 +26,7 @@ class InvoiceService:
         if self._close_session:
             self.session.close()
     
-    def prepare_invoice_data(self, production_ids: List[int]) -> Dict[str, Any]:
+    def prepare_invoice_data(self, production_ids: List[int], include_tva: bool = True) -> Dict[str, Any]:
         """
         Prepare invoice data from production batch IDs.
         
@@ -163,7 +163,8 @@ class InvoiceService:
                     print(f"DEBUG: Using default designation: '{base_designation}'")
                 
                 # Create grouping key based on product characteristics
-                group_key = (base_designation, unit_price, 19)  # Include TVA rate in grouping
+                tva_rate_group = 19 if include_tva else 0
+                group_key = (base_designation, unit_price, tva_rate_group)  # Include TVA rate in grouping
                 
                 # Group products
                 if group_key in product_groups:
@@ -173,7 +174,7 @@ class InvoiceService:
                         'designation': base_designation,
                         'quantity': quantity,
                         'unit_price': unit_price,
-                        'tva_rate': 19
+                        'tva_rate': 19 if include_tva else 0
                     }
             
             # Create line items from grouped products (sorted by designation)
@@ -196,7 +197,7 @@ class InvoiceService:
                     'quantity': quantity,
                     'unit_price': unit_price,
                     'line_total': line_total,
-                    'tva_rate': 19  # 19% TVA
+                    'tva_rate': 19 if include_tva else 0  # TVA rate per line
                 }
                 line_items.append(line_item_data)
                 total_ht += line_total
@@ -204,10 +205,19 @@ class InvoiceService:
             # Calculate totals
             discount_rate = Decimal('0')  # 0% discount by default
             total_ht_net = total_ht * (1 - discount_rate)
-            tva_amount = total_ht_net * Decimal('0.19')  # 19% TVA
-            total_ttc = total_ht_net + tva_amount
-            timbre = total_ttc * Decimal('0.01')  # 1% timbre
-            total_ttc_net = total_ttc + timbre
+            if include_tva:
+                tva_amount = (total_ht_net * Decimal('0.19')).quantize(Decimal('0.01'))  # 19% TVA
+                total_ttc = total_ht_net + tva_amount
+                timbre = (total_ttc * Decimal('0.01')).quantize(Decimal('0.01'))  # 1% timbre
+                total_ttc_net = total_ttc + timbre
+                tva_label = "TVA (19%)"
+            else:
+                # Without TVA: no TVA, no timbre; totals equal HT
+                tva_amount = Decimal('0.00')
+                total_ttc = total_ht_net
+                timbre = Decimal('0.00')
+                total_ttc_net = total_ttc
+                tva_label = "TVA (0%)"
             
             # Convert amount to words
             amount_in_words = self._number_to_words_dz(total_ttc_net)
@@ -225,14 +235,17 @@ class InvoiceService:
                 'client_ai': getattr(client, 'ai', '') or '',
                 'client_phone': client.phone or '',
                 'payment_mode': 'Mode de Paiement: …',
+                'include_tva': include_tva,
                 'line_items': line_items,
                 'total_ht': total_ht,
                 'discount': f"{discount_rate * 100:.0f}%",
                 'total_ht_net': total_ht_net,
                 'tva_amount': tva_amount,
+                'tva': tva_amount,
                 'total_ttc': total_ttc,
                 'timbre': timbre,
                 'total_ttc_net': total_ttc_net,
+                'tva_label': tva_label,
                 'amount_in_words': amount_in_words,
                 'signature_date': date.today().strftime('%d/%m/%Y')
             }
