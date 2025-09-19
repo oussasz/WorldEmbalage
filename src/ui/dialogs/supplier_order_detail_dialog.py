@@ -1032,20 +1032,8 @@ class SupplierOrderDetailDialog(QDialog):
                         remaining
                     ))
 
-                # Then, include reception rows (order-scoped). We'll interleave them chronologically for display,
-                # but running remaining is computed strictly on deliveries (line-item scoped). For receptions we
-                # display N/A for remaining unless we can infer the line item, which generally we cannot reliably.
-                for r in receptions:
-                    rows.append((
-                        "Réception",
-                        getattr(r, 'reception_date', None),
-                        getattr(r, 'quantity', 0),
-                        r.notes or f"REC-{r.id}",
-                        "",
-                        "",
-                        "",
-                        "N/A"
-                    ))
+                # Do not add separate reception rows when deliveries are present to avoid duplicated entries.
+                # If desired in the future, receptions can be shown only when no deliveries exist.
 
                 # Sort by date ascending
                 def _safe_date(x):

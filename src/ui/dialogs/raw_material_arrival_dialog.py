@@ -525,32 +525,8 @@ class RawMaterialArrivalDialog(QDialog):
                     session.add(reception)
                     session.flush()  # ensure reception.id is available for linking
 
-                    # Also log a material delivery event for history tracking
-                    try:
-                        so = session.query(SupplierOrder).filter(SupplierOrder.id == supplier_order_id).first()
-                        target_li = None
-                        if so and hasattr(so, 'line_items') and so.line_items:
-                            # Prefer matching by plaque dimensions to the aggregated key (w, h, r)
-                            for li in so.line_items:
-                                if (
-                                    getattr(li, 'plaque_width_mm', None) == w and
-                                    getattr(li, 'plaque_length_mm', None) == h and
-                                    getattr(li, 'plaque_flap_mm', None) == r
-                                ):
-                                    target_li = li
-                                    break
-                            if target_li is None:
-                                # Fallback: first line item
-                                target_li = so.line_items[0]
-
-                            delivery = MaterialDelivery(
-                                supplier_order_line_item_id=target_li.id,
-                                received_quantity=qty,
-                                batch_reference=f"REC-{reception.id}"
-                            )
-                            session.add(delivery)
-                    except Exception as md_err:
-                        print(f"Warning: Could not create MaterialDelivery for reception {reception.id}: {md_err}")
+                    # Do not create another MaterialDelivery here; deliveries were already created per line item above.
+                    # Keeping only one delivery record per receipt prevents duplicates in Historique.
                 
                 session.commit()
                 
