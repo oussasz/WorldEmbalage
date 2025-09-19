@@ -370,6 +370,8 @@ class MainWindow(QMainWindow):
             self.receptions_grid.add_context_action("edit", "✏️ Modifier réception")
             self.receptions_grid.add_context_action("delete", "🗑️ Supprimer réception")
             self.receptions_grid.add_context_action("print_label", "🏷️ Imprimer l'étiquette matière première")
+            # New action: archive raw material reception(s)
+            self.receptions_grid.add_context_action("move_to_archive", "📦 Archiver matière première")
             
             # Connect stock context menu signals
             self.receptions_grid.contextMenuActionTriggered.connect(self._handle_stock_context_menu)
@@ -2069,7 +2071,8 @@ class MainWindow(QMainWindow):
             # Refresh stock - Raw materials (receptions) on left side
             # Refresh stock - Raw materials (receptions) - filter out archived supplier orders
             receptions = session.query(Reception).join(Reception.supplier_order).filter(
-                ~SupplierOrder.notes.like('[ARCHIVED]%')
+                ~SupplierOrder.notes.like('[ARCHIVED]%'),
+                ~Reception.notes.like('[ARCHIVED]%')
             ).all()
             
             # Group receptions by dimensions (extracted from notes) and sum quantities
@@ -2840,6 +2843,94 @@ class MainWindow(QMainWindow):
             self._delete_reception(row_data)
         elif action_name == "print_label":
             self._print_raw_material_label(row_data)
+        elif action_name == "move_to_archive":
+            self._move_reception_to_archive(row_data)
+
+    def _move_reception_to_archive(self, row_data: list):
+        """Archive one or multiple receptions (raw materials) by prefixing notes with [ARCHIVED]."""
+        from PyQt6.QtWidgets import QMessageBox
+        from datetime import datetime
+        from models.orders import Reception, ClientOrder, Quotation, QuotationLineItem, SupplierOrder, SupplierOrderLineItem
+        session = SessionLocal()
+        try:
+            if not row_data:
+                QMessageBox.warning(self, 'Erreur', 'Données de réception invalides')
+                return
+            # First column holds comma separated IDs
+            id_str = row_data[0]
+            try:
+                reception_ids = [int(x.strip()) for x in id_str.split(',') if x.strip()]
+            except ValueError:
+                QMessageBox.warning(self, 'Erreur', 'ID(s) de réception invalides')
+                return
+
+            reply = QMessageBox.question(
+                self,
+                'Confirmer archivage',
+                f"Archiver {len(reception_ids)} réception(s) sélectionnée(s) ?\n\nElles seront retirées du stock actif et visibles dans l'onglet Archive (Matières Premières).",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            archived_count = 0
+            for rid in reception_ids:
+                reception = session.query(Reception).filter(Reception.id == rid).first()
+                if not reception:
+                    continue
+                if reception.notes and reception.notes.startswith('[ARCHIVED]'):
+                    continue  # already archived
+
+                # Attempt to enrich description if current notes are generic
+                enriched_description = None
+                try:
+                    # If notes exist and are not generic arrival auto text, reuse
+                    if reception.notes and reception.notes.strip() and not reception.notes.startswith('Arrivée matière:'):
+                        enriched_description = reception.notes.strip()
+                    else:
+                        # Derive from related supplier order -> client order -> quotation line items
+                        if reception.supplier_order_id:
+                            supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == reception.supplier_order_id).first()
+                            if supplier_order and supplier_order.line_items:
+                                so_line = supplier_order.line_items[0]
+                                # Find any client order for that client with quotation
+                                client_orders = session.query(ClientOrder).filter(
+                                    ClientOrder.client_id == so_line.client_id,
+                                    ClientOrder.quotation_id.isnot(None)
+                                ).all()
+                                for co in client_orders:
+                                    if co.quotation:
+                                        q = co.quotation
+                                        if q.line_items:
+                                            for ql in q.line_items:
+                                                if ql.description and ql.description.strip():
+                                                    enriched_description = ql.description.strip()
+                                                    break
+                                            if enriched_description:
+                                                break
+                                        if (not enriched_description) and q.notes and q.notes.strip():
+                                            enriched_description = q.notes.strip()
+                                    if enriched_description:
+                                        break
+                except Exception as enrich_err:
+                    print(f"Warning: could not derive description for reception {rid}: {enrich_err}")
+
+                timestamp = datetime.now().strftime('%Y-%m-%d %H:%M')
+                base_desc = enriched_description or (reception.notes.strip() if reception.notes else 'Matière première')
+                reception.notes = f"[ARCHIVED] {timestamp} | {base_desc}"
+                archived_count += 1
+
+            session.commit()
+            QMessageBox.information(self, 'Archivage terminé', f'{archived_count} réception(s) archivée(s).')
+            self.refresh_all()
+            if hasattr(self, 'archive_widget'):
+                self.archive_widget.refresh_all_data()
+        except Exception as e:
+            session.rollback()
+            QMessageBox.critical(self, 'Erreur', f'Echec archivage: {e}')
+        finally:
+            session.close()
 
     def _on_stock_double_click(self, row: int):
         """Handle double-click on stock item (raw materials)"""
@@ -3402,6 +3493,21 @@ Détails individuels:"""
                     old_quantity = existing_batch.quantity
                     existing_batch.quantity += data['quantity_produced']
 
+                    # If the existing batch was archived, automatically restore it
+                    if existing_batch.batch_code.startswith('[ARCHIVED]'):
+                        restored_code = existing_batch.batch_code.replace('[ARCHIVED]', '').strip()
+                        print(f"DEBUG: Existing batch {existing_batch.id} was archived. Restoring code to '{restored_code}'")
+                        existing_batch.batch_code = restored_code
+                        # Optional: notify user it was restored
+                        try:
+                            QMessageBox.information(
+                                self,
+                                "Lot restauré",
+                                "Le lot existant était archivé et a été restauré automatiquement pour recevoir la nouvelle production."
+                            )
+                        except Exception:
+                            pass
+
                     # Populate description if missing
                     if (not existing_batch.description) or (not existing_batch.description.strip()):
                         try:
@@ -3513,6 +3619,7 @@ Détails individuels:"""
                 
                 print(f"DEBUG: Re-queried {len(current_receptions)} receptions in current session")
                 
+                deleted_reception_ids = set()
                 for i, reception in enumerate(current_receptions):
                     print(f"DEBUG: Reception {i+1}: ID={reception.id}, Quantity={reception.quantity}")
                     if quantity_remaining <= 0:
@@ -3523,6 +3630,7 @@ Détails individuels:"""
                         print(f"DEBUG: Deleting entire reception {reception.id} (quantity: {reception.quantity})")
                         quantity_remaining -= reception.quantity
                         session.delete(reception)
+                        deleted_reception_ids.add(reception.id)
                     else:
                         # Use partial reception
                         old_qty = reception.quantity
@@ -3536,11 +3644,21 @@ Détails individuels:"""
                 session.commit()
                 print(f"DEBUG: Transaction committed successfully")
                 
-                # Verify the changes were saved by re-querying
+                # Verify the changes were saved by re-querying (skip deleted ones)
                 print(f"DEBUG: Verifying changes in database...")
                 for reception in current_receptions:
-                    session.refresh(reception)
-                    print(f"DEBUG: Reception {reception.id} quantity after commit: {reception.quantity}")
+                    if reception.id in deleted_reception_ids:
+                        print(f"DEBUG: Reception {reception.id} was deleted; skipping refresh")
+                        continue
+                    try:
+                        refreshed = session.query(Reception).filter(Reception.id == reception.id).first()
+                        if refreshed is not None:
+                            session.refresh(refreshed)
+                            print(f"DEBUG: Reception {refreshed.id} quantity after commit: {refreshed.quantity}")
+                        else:
+                            print(f"DEBUG: Reception {reception.id} no longer exists in DB")
+                    except Exception as refresh_err:
+                        print(f"DEBUG: Skipping refresh for reception {reception.id}: {refresh_err}")
                 
                 # Clear any cached objects to ensure fresh data
                 session.expunge_all()

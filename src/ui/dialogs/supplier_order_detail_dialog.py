@@ -920,23 +920,180 @@ class SupplierOrderDetailDialog(QDialog):
         
         layout.addWidget(timeline_group)
         
-        # Status history (if available)
-        if hasattr(self.supplier_order, 'receptions') and self.supplier_order.receptions:
-            receptions_group = QGroupBox("Réceptions")
-            receptions_layout = QVBoxLayout(receptions_group)
-            
-            receptions_table = QTableWidget()
-            receptions_table.setColumnCount(3)
-            receptions_table.setHorizontalHeaderLabels(["Date", "Quantité", "Notes"])
-            receptions_table.setRowCount(len(self.supplier_order.receptions))
-            
-            for row, reception in enumerate(self.supplier_order.receptions):
-                receptions_table.setItem(row, 0, QTableWidgetItem(reception.reception_date.strftime("%d/%m/%Y")))
-                receptions_table.setItem(row, 1, QTableWidgetItem(str(reception.quantity)))
-                receptions_table.setItem(row, 2, QTableWidgetItem(reception.notes or ""))
-            
-            receptions_layout.addWidget(receptions_table)
-            layout.addWidget(receptions_group)
+        # Status history (if available): show both Receptions and Material Deliveries
+        from config.database import SessionLocal
+        from models.orders import SupplierOrderLineItem, MaterialDelivery, Reception
+        session = None
+        try:
+            session = SessionLocal()
+            receptions = session.query(Reception).filter(Reception.supplier_order_id == self.supplier_order.id).all()
+            deliveries = (
+                session.query(MaterialDelivery)
+                .join(SupplierOrderLineItem, MaterialDelivery.supplier_order_line_item_id == SupplierOrderLineItem.id)
+                .filter(SupplierOrderLineItem.supplier_order_id == self.supplier_order.id)
+                .all()
+            )
+
+            if receptions or deliveries:
+                history_group = QGroupBox("Réceptions par Article")
+                history_layout = QVBoxLayout(history_group)
+
+                table = QTableWidget()
+                # Columns: Type, Date, Quantité, Réf/Notes, Description, Client, Dim Plaque, Qté Restante
+                headers = [
+                    "Type", "Date", "Quantité", "Référence / Notes",
+                    "Description", "Client", "Dimension de Plaque", "Qté Restante"
+                ]
+                table.setColumnCount(len(headers))
+                table.setHorizontalHeaderLabels(headers)
+
+                # Helper to compute remaining quantity per line item
+                from models.orders import SupplierOrderStatus
+                client_names_cache = {}
+                def _client_name(client_id):
+                    if not client_id:
+                        return "N/A"
+                    if client_id in client_names_cache:
+                        return client_names_cache[client_id]
+                    from models.clients import Client
+                    c = session.query(Client).filter(Client.id == client_id).first()
+                    name = c.name if c else "N/A"
+                    client_names_cache[client_id] = name
+                    return name
+
+                # Build combined rows enhanced with line item context
+                rows = []
+                # Compute running remaining per line item (ordered - cumulative received up to that delivery)
+                from collections import defaultdict
+                from datetime import datetime
+
+                # Prepare ordered quantities per line item for quick lookup
+                ordered_qty_per_line = {}
+                for li in session.query(SupplierOrderLineItem).filter(
+                    SupplierOrderLineItem.supplier_order_id == self.supplier_order.id
+                ).all():
+                    try:
+                        ordered_qty_per_line[li.id] = int(getattr(li, 'quantity', 0) or 0)
+                    except Exception:
+                        ordered_qty_per_line[li.id] = 0
+
+                # Sort deliveries by date then id to have a stable chronological order
+                def _delivery_sort_key(d):
+                    dt = getattr(d, 'delivery_date', None)
+                    # Use a very old date if missing to keep them first but stable
+                    try:
+                        sort_dt = dt or datetime.min
+                    except Exception:
+                        sort_dt = datetime.min
+                    return (sort_dt, getattr(d, 'id', 0) or 0)
+
+                deliveries_sorted = sorted(deliveries, key=_delivery_sort_key)
+
+                running_received = defaultdict(int)  # line_item_id -> cumulative received so far
+
+                # Receptions belong to supplier order, deliveries to line items; the running remaining is computed on deliveries
+                for d in deliveries_sorted:
+                    li = session.query(SupplierOrderLineItem).filter(
+                        SupplierOrderLineItem.id == d.supplier_order_line_item_id
+                    ).first()
+
+                    desc = getattr(li, 'notes', None) or getattr(li, 'material_reference', None) or getattr(li, 'cardboard_type', None) or ""
+                    client = _client_name(getattr(li, 'client_id', None) if li else None)
+                    dims = "N/A"
+                    if li:
+                        try:
+                            dims = f"{li.plaque_width_mm}×{li.plaque_length_mm}×{li.plaque_flap_mm}"
+                        except Exception:
+                            pass
+
+                    qty_received = 0
+                    try:
+                        qty_received = int(getattr(d, 'received_quantity', 0) or 0)
+                    except Exception:
+                        qty_received = 0
+
+                    ordered = ordered_qty_per_line.get(getattr(li, 'id', None), 0)
+                    # Update running tally then compute remaining after this delivery
+                    line_id = getattr(li, 'id', None)
+                    if line_id is not None:
+                        running_received[line_id] += qty_received
+                        remaining = max(ordered - running_received[line_id], 0)
+                    else:
+                        remaining = "N/A"
+
+                    rows.append((
+                        "Livraison",
+                        getattr(d, 'delivery_date', None),
+                        qty_received,
+                        d.batch_reference or "",
+                        desc,
+                        client,
+                        dims,
+                        remaining
+                    ))
+
+                # Then, include reception rows (order-scoped). We'll interleave them chronologically for display,
+                # but running remaining is computed strictly on deliveries (line-item scoped). For receptions we
+                # display N/A for remaining unless we can infer the line item, which generally we cannot reliably.
+                for r in receptions:
+                    rows.append((
+                        "Réception",
+                        getattr(r, 'reception_date', None),
+                        getattr(r, 'quantity', 0),
+                        r.notes or f"REC-{r.id}",
+                        "",
+                        "",
+                        "",
+                        "N/A"
+                    ))
+
+                # Sort by date ascending
+                def _safe_date(x):
+                    return x[1] or QDate.currentDate().toPyDate()
+                rows.sort(key=_safe_date)
+
+                table.setRowCount(len(rows))
+                for i, (typ, dt, qty, ref, desc, client, dims, rem) in enumerate(rows):
+                    table.setItem(i, 0, QTableWidgetItem(typ))
+                    try:
+                        if dt:
+                            table.setItem(i, 1, QTableWidgetItem(dt.strftime("%d/%m/%Y")))
+                        else:
+                            table.setItem(i, 1, QTableWidgetItem("N/A"))
+                    except Exception:
+                        table.setItem(i, 1, QTableWidgetItem(str(dt) if dt else "N/A"))
+                    table.setItem(i, 2, QTableWidgetItem(str(qty)))
+                    table.setItem(i, 3, QTableWidgetItem(ref))
+                    table.setItem(i, 4, QTableWidgetItem(desc))
+                    table.setItem(i, 5, QTableWidgetItem(client))
+                    table.setItem(i, 6, QTableWidgetItem(dims))
+                    table.setItem(i, 7, QTableWidgetItem(str(rem)))
+
+                # Wider columns for readability
+                table.resizeColumnsToContents()
+                try:
+                    table.setColumnWidth(0, 90)
+                    table.setColumnWidth(1, 120)
+                    table.setColumnWidth(2, 90)
+                    table.setColumnWidth(3, 160)
+                    table.setColumnWidth(4, 220)
+                    table.setColumnWidth(5, 180)
+                    table.setColumnWidth(6, 160)
+                    table.setColumnWidth(7, 120)
+                except Exception:
+                    pass
+
+                history_layout.addWidget(table)
+                layout.addWidget(history_group)
+        except Exception as hist_err:
+            # Non-fatal: keep UI working
+            print(f"Warning: could not load receptions history: {hist_err}")
+        finally:
+            if session is not None:
+                try:
+                    session.close()
+                except Exception:
+                    pass
         
         # Full notes section
         if self.supplier_order.notes:
