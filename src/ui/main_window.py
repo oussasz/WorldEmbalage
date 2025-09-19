@@ -52,6 +52,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle('World Embalage - Gestion Atelier Carton')
         self.setWindowIcon(IconManager.create_text_icon("WE", bg_color="#2C3E50"))
+        # Allow maximizing the window
+        try:
+            self.setMinimumSize(900, 600)
+            self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+        except Exception:
+            pass
         self._build_ui()
 
     def _build_ui(self) -> None:

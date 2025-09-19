@@ -11,6 +11,7 @@ from config.settings import settings
 from sqlalchemy.exc import OperationalError
 from config.database import engine
 from ui.splash import SplashScreen
+import signal
 
 
 def main():
@@ -31,6 +32,17 @@ def main():
     init_db()
 
     app = QApplication(sys.argv)
+    
+    # Graceful Ctrl+C (SIGINT) handling to avoid core dump during splash
+    def _handle_sigint(signal_num, frame):
+        try:
+            app.quit()
+        except Exception:
+            pass
+    try:
+        signal.signal(signal.SIGINT, _handle_sigint)
+    except Exception:
+        pass
     app.setApplicationName("World Embalage")
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("World Embalage")

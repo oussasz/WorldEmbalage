@@ -1,16 +1,18 @@
 from __future__ import annotations
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, 
-                            QLabel, QPushButton, QFrame, QScrollArea, QSizePolicy)
+                            QLabel, QPushButton, QFrame, QScrollArea, QSizePolicy,
+                            QTableWidget, QTableWidgetItem, QProgressBar)
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer
 from PyQt6.QtGui import QFont, QPalette
 from config.database import SessionLocal
 from models.suppliers import Supplier
 from models.clients import Client
-from models.orders import ClientOrder, SupplierOrder
+from models.orders import ClientOrder, SupplierOrder, SupplierOrderLineItem, MaterialDelivery, StockMovement, StockMovementType, Delivery, Quotation
 from models.production import ProductionBatch
 from models.orders import ClientOrderStatus, SupplierOrderStatus
 from ui.styles import IconManager
 from typing import Dict, Any, List
+from sqlalchemy.sql import func
 import datetime
 
 
@@ -278,45 +280,77 @@ class Dashboard(QWidget):
         """)
         layout.addWidget(header)
         
-        # Stats cards row
-        stats_layout = QHBoxLayout()
-        stats_layout.setSpacing(12)
-        
-        self.clients_card = StatCard("Clients", "0", "C", "#28A745")
-        self.suppliers_card = StatCard("Fournisseurs", "0", "F", "#17A2B8")
-        self.orders_card = StatCard("Commandes", "0", "CO", "#FFC107")
-        self.production_card = StatCard("En Production", "0", "P", "#DC3545")
-        
-        # Connect card clicks to tab changes
-        self.clients_card.clicked.connect(lambda: self.tabChangeRequested.emit(1))
-        self.suppliers_card.clicked.connect(lambda: self.tabChangeRequested.emit(2))
-        self.orders_card.clicked.connect(lambda: self.tabChangeRequested.emit(3))
-        self.production_card.clicked.connect(lambda: self.tabChangeRequested.emit(5))
-        
-        stats_layout.addWidget(self.clients_card)
-        stats_layout.addWidget(self.suppliers_card)
-        stats_layout.addWidget(self.orders_card)
-        stats_layout.addWidget(self.production_card)
-        
-        layout.addLayout(stats_layout)
-        
-        # Bottom section with activities and quick actions
+    # Stats cards row 1 removed as per user request (clients, fournisseurs, commandes, en production)
+
+        # Stats cards row 2 (requested KPIs)
+        stats_layout2 = QHBoxLayout()
+        stats_layout2.setSpacing(12)
+
+        self.plaques_stock_card = StatCard("Plaques en stock", "0", "PL", "#0D6EFD")
+        self.pf_stock_card = StatCard("PF en stock", "0", "PF", "#20C997")
+        self.devis_unconfirmed_card = StatCard("Devis non confirmés", "0", "D", "#6F42C1")
+        self.supplier_initial_card = StatCard("Cmd. MP non passées", "0", "CM", "#FD7E14")
+
+        # Navigate suggestions: clicking opens orders tab by default
+        self.plaques_stock_card.clicked.connect(lambda: self.tabChangeRequested.emit(3))
+        self.pf_stock_card.clicked.connect(lambda: self.tabChangeRequested.emit(5))
+        self.devis_unconfirmed_card.clicked.connect(lambda: self.tabChangeRequested.emit(3))
+        self.supplier_initial_card.clicked.connect(lambda: self.tabChangeRequested.emit(3))
+
+        stats_layout2.addWidget(self.plaques_stock_card)
+        stats_layout2.addWidget(self.pf_stock_card)
+        stats_layout2.addWidget(self.devis_unconfirmed_card)
+        stats_layout2.addWidget(self.supplier_initial_card)
+
+        layout.addLayout(stats_layout2)
+
+        # Middle section: two analytical tables
+        mid_layout = QHBoxLayout()
+        mid_layout.setSpacing(16)
+
+        # Finished products stock table
+        self.pf_table_frame = QFrame()
+        self.pf_table_frame.setStyleSheet("""
+            QFrame { background: white; border: 1px solid #E2E6EA; border-radius: 8px; }
+            QHeaderView::section { background: #F8F9FA; font-weight: 600; }
+        """)
+        pf_vbox = QVBoxLayout(self.pf_table_frame)
+        pf_header = QLabel("📦 Produits finis en stock (Top 10)")
+        pf_header.setStyleSheet("font-size: 16px; font-weight: bold; color: #2C3E50; margin: 8px;")
+        self.pf_table = QTableWidget(0, 6)
+        self.pf_table.setHorizontalHeaderLabels(["Désignation", "Client", "Produit", "Livré", "Stock", "%"]) 
+        self.pf_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        pf_vbox.addWidget(pf_header)
+        pf_vbox.addWidget(self.pf_table)
+
+        # Supplier orders progress table
+        self.supplier_table_frame = QFrame()
+        self.supplier_table_frame.setStyleSheet("""
+            QFrame { background: white; border: 1px solid #E2E6EA; border-radius: 8px; }
+            QHeaderView::section { background: #F8F9FA; font-weight: 600; }
+        """)
+        so_vbox = QVBoxLayout(self.supplier_table_frame)
+        so_header = QLabel("📑 Commandes MP en cours")
+        so_header.setStyleSheet("font-size: 16px; font-weight: bold; color: #2C3E50; margin: 8px;")
+        self.supplier_table = QTableWidget(0, 8)
+        self.supplier_table.setHorizontalHeaderLabels(["BC", "Ligne", "Client", "Désignation", "Commandé", "Réçu", "Restant", "Progression"]) 
+        self.supplier_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        so_vbox.addWidget(so_header)
+        so_vbox.addWidget(self.supplier_table)
+
+        mid_layout.addWidget(self.pf_table_frame, 1)
+        mid_layout.addWidget(self.supplier_table_frame, 1)
+
+        layout.addLayout(mid_layout)
+
+        # Bottom section: activities only (Quick Actions removed per request)
         bottom_layout = QHBoxLayout()
         bottom_layout.setSpacing(16)
-        
-        # Recent activities (2/3 width)
+
         self.activities_widget = RecentActivityWidget()
         self.activities_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        
-        # Quick actions (1/3 width)
-        self.quick_actions = QuickActionsWidget()
-        self.quick_actions.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
-        self.quick_actions.setFixedWidth(200)
-        self.quick_actions.actionTriggered.connect(self.actionTriggered.emit)
-        
-        bottom_layout.addWidget(self.activities_widget, 2)
-        bottom_layout.addWidget(self.quick_actions, 1)
-        
+
+        bottom_layout.addWidget(self.activities_widget, 1)
         layout.addLayout(bottom_layout)
         
     def _setup_refresh_timer(self):
@@ -338,31 +372,22 @@ class Dashboard(QWidget):
         """Refresh dashboard data"""
         session = SessionLocal()
         try:
-            # Update stats with error handling for missing tables
-            try:
-                clients_count = session.query(Client).count()
-            except Exception:
-                clients_count = 0
-            
-            try:
-                suppliers_count = session.query(Supplier).count()
-            except Exception:
-                suppliers_count = 0
-            
-            try:
-                orders_count = session.query(ClientOrder).count()
-            except Exception:
-                orders_count = 0
-            
-            try:
-                production_count = session.query(ProductionBatch).count()
-            except Exception:
-                production_count = 0
-            
-            self.clients_card.update_value(str(clients_count))
-            self.suppliers_card.update_value(str(suppliers_count))
-            self.orders_card.update_value(str(orders_count))
-            self.production_card.update_value(str(production_count))
+            # Removed non-essential KPI updates (clients, fournisseurs, commandes, en production)
+
+            # Compute requested KPIs
+            plaques_stock = self._compute_plaques_stock(session)
+            pf_stock_total, pf_rows = self._compute_finished_products_stock(session)
+            devis_unconfirmed = self._compute_unconfirmed_quotations(session)
+            supplier_initial = self._compute_supplier_orders_initial(session)
+
+            self.plaques_stock_card.update_value(str(plaques_stock))
+            self.pf_stock_card.update_value(str(pf_stock_total))
+            self.devis_unconfirmed_card.update_value(str(devis_unconfirmed))
+            self.supplier_initial_card.update_value(str(supplier_initial))
+
+            # Populate tables
+            self._populate_pf_table(pf_rows)
+            self._populate_supplier_table(session)
             
             # Update recent activities
             self._update_recent_activities(session)
@@ -371,6 +396,152 @@ class Dashboard(QWidget):
             print(f"Error refreshing dashboard: {e}")
         finally:
             session.close()
+
+    # ----- KPI computations -----
+    def _compute_plaques_stock(self, session) -> int:
+        """Approximate plaques stock = total deliveries - stock OUT/WASTE movements."""
+        try:
+            delivered = session.query(func.coalesce(func.sum(MaterialDelivery.received_quantity), 0)).scalar() or 0
+        except Exception:
+            delivered = 0
+        try:
+            outs = session.query(func.coalesce(func.sum(StockMovement.quantity), 0)).filter(
+                StockMovement.movement_type.in_([StockMovementType.OUT, StockMovementType.WASTE])
+            ).scalar() or 0
+        except Exception:
+            outs = 0
+        return max(0, int(delivered) - int(outs))
+
+    def _compute_finished_products_stock(self, session) -> tuple[int, list[dict]]:
+        """Compute finished products stock aggregated by designation and client.
+        Returns (total_stock, rows) where rows contain designation, client, produced, delivered, stock, percent.
+        """
+        rows: list[dict] = []
+        total_stock = 0
+        try:
+            # Produced per client order
+            produced_by_order = dict(session.query(
+                ClientOrder.id, func.coalesce(func.sum(ProductionBatch.quantity), 0)
+            ).join(ProductionBatch, ProductionBatch.client_order_id == ClientOrder.id).group_by(ClientOrder.id).all())
+
+            # Delivered per client order
+            delivered_by_order = dict(session.query(
+                ClientOrder.id, func.coalesce(func.sum(Delivery.quantity), 0)
+            ).join(Delivery, Delivery.client_order_id == ClientOrder.id).group_by(ClientOrder.id).all())
+
+            # For each order, derive designation and client
+            orders = session.query(ClientOrder).all()
+            for order in orders:
+                produced = int(produced_by_order.get(order.id, 0) or 0)
+                delivered = int(delivered_by_order.get(order.id, 0) or 0)
+                stock = max(0, produced - delivered)
+                if stock <= 0:
+                    continue
+
+                # Derive designation: prefer quotation line item description, else client order line item description, else composed dims
+                designation = "Produit fini"
+                client_name = order.client.name if order.client else ""
+                try:
+                    if order.quotation and order.quotation.line_items:
+                        qli = order.quotation.line_items[0]
+                        if qli.description:
+                            designation = qli.description
+                        elif qli.length_mm and qli.width_mm and qli.height_mm:
+                            designation = f"Caisse carton {qli.length_mm}×{qli.width_mm}×{qli.height_mm}"
+                    elif order.line_items:
+                        cli = order.line_items[0]
+                        if cli.description:
+                            designation = cli.description
+                        elif cli.length_mm and cli.width_mm and cli.height_mm:
+                            designation = f"Caisse carton {cli.length_mm}×{cli.width_mm}×{cli.height_mm}"
+                except Exception:
+                    pass
+
+                percent = int(round((stock / produced) * 100)) if produced > 0 else 0
+                rows.append({
+                    'designation': designation,
+                    'client': client_name,
+                    'produced': produced,
+                    'delivered': delivered,
+                    'stock': stock,
+                    'percent': percent
+                })
+                total_stock += stock
+
+            # Sort by stock desc and limit top 10
+            rows.sort(key=lambda r: r['stock'], reverse=True)
+            rows = rows[:10]
+        except Exception:
+            pass
+        return total_stock, rows
+
+    def _compute_unconfirmed_quotations(self, session) -> int:
+        """Count quotations not converted to client orders."""
+        try:
+            # Quotations with no linked client_order
+            return session.query(Quotation).filter(Quotation.client_order == None).count()
+        except Exception:
+            return 0
+
+    def _compute_supplier_orders_initial(self, session) -> int:
+        """Count supplier orders not yet passed (status INITIAL)."""
+        try:
+            return session.query(SupplierOrder).filter(SupplierOrder.status == SupplierOrderStatus.INITIAL).count()
+        except Exception:
+            return 0
+
+    # ----- Table population -----
+    def _populate_pf_table(self, rows: list[dict]):
+        try:
+            self.pf_table.setRowCount(0)
+            for r in rows:
+                row = self.pf_table.rowCount()
+                self.pf_table.insertRow(row)
+                self.pf_table.setItem(row, 0, QTableWidgetItem(str(r.get('designation', ''))))
+                self.pf_table.setItem(row, 1, QTableWidgetItem(str(r.get('client', ''))))
+                self.pf_table.setItem(row, 2, QTableWidgetItem(str(r.get('produced', 0))))
+                self.pf_table.setItem(row, 3, QTableWidgetItem(str(r.get('delivered', 0))))
+                self.pf_table.setItem(row, 4, QTableWidgetItem(str(r.get('stock', 0))))
+                # Progress bar for stock percentage
+                prog = QProgressBar()
+                prog.setValue(int(r.get('percent', 0)))
+                prog.setFormat("%p%")
+                prog.setStyleSheet("QProgressBar { border: 1px solid #ced4da; border-radius: 4px; text-align: center; }"
+                                   "QProgressBar::chunk { background-color: #20C997; }")
+                self.pf_table.setCellWidget(row, 5, prog)
+        except Exception as e:
+            print(f"PF table update failed: {e}")
+
+    def _populate_supplier_table(self, session):
+        try:
+            self.supplier_table.setRowCount(0)
+            q = session.query(SupplierOrderLineItem, SupplierOrder).join(SupplierOrder, SupplierOrderLineItem.supplier_order_id == SupplierOrder.id)
+            q = q.filter(SupplierOrder.status != SupplierOrderStatus.COMPLETED)
+            items = q.order_by(SupplierOrder.order_date.desc(), SupplierOrderLineItem.line_number.asc()).limit(50).all()
+            for li, so in items:
+                ordered = int(li.quantity or 0)
+                received = int(li.total_received_quantity or 0)
+                remaining = max(0, ordered - received)
+                row = self.supplier_table.rowCount()
+                self.supplier_table.insertRow(row)
+                self.supplier_table.setItem(row, 0, QTableWidgetItem(so.reference or so.bon_commande_ref))
+                self.supplier_table.setItem(row, 1, QTableWidgetItem(str(li.line_number)))
+                self.supplier_table.setItem(row, 2, QTableWidgetItem(li.client.name if li.client else ""))
+                designation = li.material_reference or li.cardboard_type or "Article"
+                self.supplier_table.setItem(row, 3, QTableWidgetItem(designation))
+                self.supplier_table.setItem(row, 4, QTableWidgetItem(str(ordered)))
+                self.supplier_table.setItem(row, 5, QTableWidgetItem(str(received)))
+                self.supplier_table.setItem(row, 6, QTableWidgetItem(str(remaining)))
+                # Progress bar
+                prog = QProgressBar()
+                percent = int(round((received / ordered) * 100)) if ordered > 0 else 0
+                prog.setValue(percent)
+                prog.setFormat(f"{percent}%")
+                prog.setStyleSheet("QProgressBar { border: 1px solid #ced4da; border-radius: 4px; text-align: center; }"
+                                   "QProgressBar::chunk { background-color: #0D6EFD; }")
+                self.supplier_table.setCellWidget(row, 7, prog)
+        except Exception as e:
+            print(f"Supplier table update failed: {e}")
             
     def _update_recent_activities(self, session):
         """Update recent activities list"""
