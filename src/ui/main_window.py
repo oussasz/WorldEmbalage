@@ -724,6 +724,7 @@ class MainWindow(QMainWindow):
                 material_service = MaterialService(session)
                 
                 try:
+                    import json
                     supplier_order = material_service.create_supplier_order(
                         supplier_id=data['supplier_id'],
                         bon_commande_ref=data['reference'],
@@ -758,12 +759,68 @@ class MainWindow(QMainWindow):
                             # Materials
                             cardboard_type=plaque_data['cardboard_type'],
                             material_reference=plaque_data['material_reference'],
-                            notes=plaque_data['notes']
+                            # Preserve full original devis line data in notes to avoid any information loss
+                            notes=(
+                                f"Depuis devis {quotation.reference} - {plaque_data['notes']}\n"
+                                f"[DEVIS_LINE_SNAPSHOT] " + json.dumps({
+                                    'line_number': line_num,
+                                    'description': quotation.line_items[line_num-1].description,
+                                    'quantity_text': quotation.line_items[line_num-1].quantity,
+                                    'unit_price': float(quotation.line_items[line_num-1].unit_price or 0),  # type: ignore[arg-type]
+                                    'total_price': float(quotation.line_items[line_num-1].total_price or 0),  # type: ignore[arg-type]
+                                    'length_mm': quotation.line_items[line_num-1].length_mm,
+                                    'width_mm': quotation.line_items[line_num-1].width_mm,
+                                    'height_mm': quotation.line_items[line_num-1].height_mm,
+                                    'color': (quotation.line_items[line_num-1].color.value if getattr(quotation.line_items[line_num-1], 'color', None) else None),  # type: ignore[union-attr]
+                                    'cardboard_type': quotation.line_items[line_num-1].cardboard_type,
+                                    'material_reference': quotation.line_items[line_num-1].material_reference,
+                                    'is_cliche': quotation.line_items[line_num-1].is_cliche,
+                                    'notes': quotation.line_items[line_num-1].notes,
+                                }, ensure_ascii=False)
+                            )
                         )
                         session.add(line_item)
                     
                     # Update supplier order total
                     supplier_order.total_amount = total_amount  # type: ignore
+
+                    # Embed a full snapshot of the source quotation in the supplier order notes
+                    quotation_snapshot = {
+                        'id': quotation.id,
+                        'reference': quotation.reference,
+                        'client_id': quotation.client_id,
+                        'issue_date': str(quotation.issue_date) if quotation.issue_date else None,
+                        'valid_until': str(quotation.valid_until) if quotation.valid_until else None,
+                        'total_amount': float(quotation.total_amount or 0),  # type: ignore[arg-type]
+                        'currency': quotation.currency,
+                        'is_initial': bool(quotation.is_initial),
+                        'notes': quotation.notes,
+                        'line_items': [
+                            {
+                                'line_number': li.line_number,
+                                'description': li.description,
+                                'quantity_text': li.quantity,
+                                'unit_price': float(li.unit_price or 0),  # type: ignore[arg-type]
+                                'total_price': float(li.total_price or 0),  # type: ignore[arg-type]
+                                'length_mm': li.length_mm,
+                                'width_mm': li.width_mm,
+                                'height_mm': li.height_mm,
+                                'color': (li.color.value if li.color else None),
+                                'cardboard_type': li.cardboard_type,
+                                'material_reference': li.material_reference,
+                                'is_cliche': li.is_cliche,
+                                'notes': li.notes,
+                            }
+                            for li in quotation.line_items
+                        ]
+                    }
+                    # Append snapshot preserving any existing notes
+                    existing_notes = supplier_order.notes or ""
+                    supplier_order.notes = (existing_notes + "\n\n[DEVIS_SNAPSHOT] " + json.dumps(quotation_snapshot, ensure_ascii=False)).strip()
+                    session.commit()
+
+                    # After successful transfer, delete the original quotation (and its line items via cascade)
+                    session.delete(quotation)
                     session.commit()
                     
                     QMessageBox.information(self, 'Succès', 
@@ -1635,6 +1692,7 @@ class MainWindow(QMainWindow):
                 material_service = MaterialService(session)
                 
                 try:
+                    import json
                     supplier_order = material_service.create_supplier_order(
                         supplier_id=data['supplier_id'],
                         bon_commande_ref=data['reference'],
@@ -1651,6 +1709,7 @@ class MainWindow(QMainWindow):
                         
                         # Find original quotation line item to get caisse dimensions
                         original_quotation = next((q for q in quotations if q.reference == plaque_data['quotation_reference']), None)
+                        original_line = None  # initialize to satisfy type checker; assigned when available
                         if original_quotation and original_quotation.line_items:
                             original_line = original_quotation.line_items[0]  # Take first line item as reference
                             caisse_length = original_line.length_mm or 0
@@ -1679,12 +1738,72 @@ class MainWindow(QMainWindow):
                             # Materials
                             cardboard_type=plaque_data['cardboard_type'],
                             material_reference=plaque_data['material_reference'],
-                            notes=f"Depuis devis {plaque_data['quotation_reference']} - {plaque_data['notes']}"
+                            # Preserve original devis line details
+                            notes=(
+                                f"Depuis devis {plaque_data['quotation_reference']} - {plaque_data['notes']}\n"
+                                f"[DEVIS_LINE_SNAPSHOT] " + json.dumps({
+                                    'quotation_reference': plaque_data['quotation_reference'],
+                                    'line_number': line_num,
+                                    'description': original_line.description if (original_quotation and original_quotation.line_items and original_line) else None,
+                                    'quantity_text': original_line.quantity if (original_quotation and original_quotation.line_items and original_line) else None,
+                                    'unit_price': float((original_line.unit_price if (original_quotation and original_quotation.line_items and original_line) else 0) or 0),  # type: ignore[arg-type]
+                                    'total_price': float((original_line.total_price if (original_quotation and original_quotation.line_items and original_line) else 0) or 0),  # type: ignore[arg-type]
+                                    'length_mm': caisse_length,
+                                    'width_mm': caisse_width,
+                                    'height_mm': caisse_height,
+                                    'color': (original_line.color.value if (original_quotation and original_quotation.line_items and original_line and original_line.color) else None),  # type: ignore[union-attr]
+                                    'cardboard_type': original_line.cardboard_type if (original_quotation and original_quotation.line_items and original_line) else None,
+                                    'material_reference': original_line.material_reference if (original_quotation and original_quotation.line_items and original_line) else None,
+                                    'is_cliche': bool(original_line.is_cliche) if (original_quotation and original_quotation.line_items and original_line) else None,
+                                    'notes': original_line.notes if (original_quotation and original_quotation.line_items and original_line) else None,
+                                }, ensure_ascii=False)
+                            )
                         )
                         session.add(line_item)
                     
                     # Update supplier order total
                     supplier_order.total_amount = total_amount  # type: ignore
+
+                    # Embed snapshots for all source quotations
+                    snapshots = []
+                    for q in quotations:
+                        snapshots.append({
+                            'id': q.id,
+                            'reference': q.reference,
+                            'client_id': q.client_id,
+                            'issue_date': str(q.issue_date) if q.issue_date else None,
+                            'valid_until': str(q.valid_until) if q.valid_until else None,
+                            'total_amount': float(q.total_amount or 0),  # type: ignore[arg-type]
+                            'currency': q.currency,
+                            'is_initial': bool(q.is_initial),
+                            'notes': q.notes,
+                            'line_items': [
+                                {
+                                    'line_number': li.line_number,
+                                    'description': li.description,
+                                    'quantity_text': li.quantity,
+                                    'unit_price': float(li.unit_price or 0),  # type: ignore[arg-type]
+                                    'total_price': float(li.total_price or 0),  # type: ignore[arg-type]
+                                    'length_mm': li.length_mm,
+                                    'width_mm': li.width_mm,
+                                    'height_mm': li.height_mm,
+                                    'color': (li.color.value if li.color else None),
+                                    'cardboard_type': li.cardboard_type,
+                                    'material_reference': li.material_reference,
+                                    'is_cliche': li.is_cliche,
+                                    'notes': li.notes,
+                                }
+                                for li in q.line_items
+                            ]
+                        })
+                    existing_notes = supplier_order.notes or ""
+                    supplier_order.notes = (existing_notes + "\n\n[DEVIS_SNAPSHOTS] " + json.dumps(snapshots, ensure_ascii=False)).strip()
+
+                    session.commit()
+
+                    # Delete all original quotations after successful transfer
+                    for q in quotations:
+                        session.delete(q)
                     session.commit()
                     
                     QMessageBox.information(self, 'Succès', 

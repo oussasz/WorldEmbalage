@@ -7,7 +7,7 @@ from PyQt6.QtGui import QFont, QPalette
 from config.database import SessionLocal
 from models.suppliers import Supplier
 from models.clients import Client
-from models.orders import ClientOrder, SupplierOrder, SupplierOrderLineItem, MaterialDelivery, StockMovement, StockMovementType, Delivery, Quotation
+from models.orders import ClientOrder, SupplierOrder, SupplierOrderLineItem, MaterialDelivery, StockMovement, StockMovementType, Delivery, Quotation, Reception
 from models.production import ProductionBatch
 from models.orders import ClientOrderStatus, SupplierOrderStatus
 from ui.styles import IconManager
@@ -401,7 +401,16 @@ class Dashboard(QWidget):
     def _compute_plaques_stock(self, session) -> int:
         """Approximate plaques stock = total deliveries - stock OUT/WASTE movements."""
         try:
-            delivered = session.query(func.coalesce(func.sum(MaterialDelivery.received_quantity), 0)).scalar() or 0
+            # Align with stock grid: count only non-archived receptions as incoming plaques
+            delivered = (
+                session.query(func.coalesce(func.sum(Reception.quantity), 0))
+                .join(Reception.supplier_order)
+                .filter(
+                    ~SupplierOrder.notes.like('[ARCHIVED]%'),
+                    ~Reception.notes.like('[ARCHIVED]%')
+                )
+                .scalar() or 0
+            )
         except Exception:
             delivered = 0
         try:
@@ -419,15 +428,28 @@ class Dashboard(QWidget):
         rows: list[dict] = []
         total_stock = 0
         try:
-            # Produced per client order
-            produced_by_order = dict(session.query(
-                ClientOrder.id, func.coalesce(func.sum(ProductionBatch.quantity), 0)
-            ).join(ProductionBatch, ProductionBatch.client_order_id == ClientOrder.id).group_by(ClientOrder.id).all())
+            # Produced per client order (exclude archived batches so dashboard matches stock view)
+            produced_by_order = dict(
+                session.query(
+                    ClientOrder.id,
+                    func.coalesce(func.sum(ProductionBatch.quantity), 0)
+                )
+                .join(ProductionBatch, ProductionBatch.client_order_id == ClientOrder.id)
+                .filter(~ProductionBatch.batch_code.like('[ARCHIVED]%'))
+                .group_by(ClientOrder.id)
+                .all()
+            )
 
-            # Delivered per client order
-            delivered_by_order = dict(session.query(
-                ClientOrder.id, func.coalesce(func.sum(Delivery.quantity), 0)
-            ).join(Delivery, Delivery.client_order_id == ClientOrder.id).group_by(ClientOrder.id).all())
+            # Delivered per client order (deliveries are never archived at batch level, keep as-is)
+            delivered_by_order = dict(
+                session.query(
+                    ClientOrder.id,
+                    func.coalesce(func.sum(Delivery.quantity), 0)
+                )
+                .join(Delivery, Delivery.client_order_id == ClientOrder.id)
+                .group_by(ClientOrder.id)
+                .all()
+            )
 
             # For each order, derive designation and client
             orders = session.query(ClientOrder).all()
@@ -457,7 +479,71 @@ class Dashboard(QWidget):
                 except Exception:
                     pass
 
-                percent = int(round((stock / produced) * 100)) if produced > 0 else 0
+                # Compute percentage relative to the EXACT linked raw material (plaques) in stock
+                # Strategy:
+                # 1) Identify target caisse dimensions from quotation/client order line item
+                # 2) Prefer supplier order linked to this client order; otherwise fall back to any matching line items for the same client and dims
+                # 3) Sum MaterialDelivery.received_quantity for matched SupplierOrderLineItem(s) whose SupplierOrder is not archived
+                raw_qty = 0
+                try:
+                    target_dims = None  # (L, W, H)
+                    if order.quotation and order.quotation.line_items:
+                        qli = order.quotation.line_items[0]
+                        if qli.length_mm and qli.width_mm and qli.height_mm:
+                            target_dims = (int(qli.length_mm), int(qli.width_mm), int(qli.height_mm))
+                    if target_dims is None and order.line_items:
+                        cli = order.line_items[0]
+                        if cli.length_mm and cli.width_mm and cli.height_mm:
+                            target_dims = (int(cli.length_mm), int(cli.width_mm), int(cli.height_mm))
+
+                    if target_dims is not None:
+                        L, W, H = target_dims
+                        # First, try to compute raw_qty strictly from non-archived Receptions
+                        # whose SupplierOrder has a line item for the same client and EXACT caisse dimensions,
+                        # and whose notes contain the dimension string (as used in stock display).
+                        dim_pattern = f"%{L}x{W}x{H}mm%"
+                        raw_qty = int(
+                            session.query(func.coalesce(func.sum(Reception.quantity), 0))
+                            .join(Reception.supplier_order)
+                            .join(SupplierOrderLineItem, SupplierOrderLineItem.supplier_order_id == SupplierOrder.id)
+                            .filter(
+                                SupplierOrderLineItem.client_id == order.client_id,
+                                SupplierOrderLineItem.caisse_length_mm == L,
+                                SupplierOrderLineItem.caisse_width_mm == W,
+                                SupplierOrderLineItem.caisse_height_mm == H,
+                                ~SupplierOrder.notes.like('[ARCHIVED]%'),
+                                ~Reception.notes.like('[ARCHIVED]%'),
+                                Reception.notes.like(dim_pattern)
+                            )
+                            .scalar() or 0
+                        )
+
+                        # Fallback: if no reception-based qty found, use exact matching line items' deliveries (non-archived supplier orders)
+                        if raw_qty == 0:
+                            li_q = (
+                                session.query(SupplierOrderLineItem)
+                                .join(SupplierOrder, SupplierOrderLineItem.supplier_order_id == SupplierOrder.id)
+                                .filter(
+                                    SupplierOrderLineItem.client_id == order.client_id,
+                                    SupplierOrderLineItem.caisse_length_mm == L,
+                                    SupplierOrderLineItem.caisse_width_mm == W,
+                                    SupplierOrderLineItem.caisse_height_mm == H,
+                                    ~SupplierOrder.notes.like('[ARCHIVED]%')
+                                )
+                            )
+                            if order.supplier_order_id:
+                                li_q = li_q.filter(SupplierOrderLineItem.supplier_order_id == order.supplier_order_id)
+                            matching_items = li_q.all()
+                            if matching_items:
+                                raw_qty = int(
+                                    session.query(func.coalesce(func.sum(MaterialDelivery.received_quantity), 0))
+                                    .filter(MaterialDelivery.supplier_order_line_item_id.in_([li.id for li in matching_items]))
+                                    .scalar() or 0
+                                )
+                except Exception:
+                    raw_qty = 0
+
+                percent = int(round((stock / raw_qty) * 100)) if raw_qty > 0 else 0
                 rows.append({
                     'designation': designation,
                     'client': client_name,

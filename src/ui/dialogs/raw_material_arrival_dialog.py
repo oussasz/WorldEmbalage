@@ -11,7 +11,7 @@ from models.orders import Reception, Quotation, SupplierOrder, SupplierOrderLine
 from services.delivery_tracking_service import DeliveryTrackingService
 from models.suppliers import Supplier
 from models.plaques import Plaque
-from typing import List, Dict, Any
+from typing import List, Dict, Any, cast
 from datetime import datetime
 
 
@@ -357,7 +357,7 @@ class RawMaterialArrivalDialog(QDialog):
             try:
                 saved_deliveries = []
                 updated_line_items = []
-                supplier_orders_used = set()  # Track which supplier orders we used - initialize at method level
+                supplier_orders_used: set[int] = set()  # Track which supplier orders we used - initialize at method level
                 # Aggregate receptions by (supplier_order_id, width, height, rabat)
                 reception_aggregates: dict[tuple[int, int, int, int], int] = {}
                 
@@ -386,14 +386,16 @@ class RawMaterialArrivalDialog(QDialog):
                             applied_quantity = min(remaining_quantity, needed_quantity)
                             
                             # Track supplier order for Reception creation
-                            supplier_orders_used.add(line_item.supplier_order_id)
+                            supplier_orders_used.add(cast(int, line_item.supplier_order_id))
                             # Aggregate reception quantity by (supplier_order_id, dimensions)
-                            agg_key = (line_item.supplier_order_id, entry['width'], entry['height'], entry['rabat'])
+                            agg_key: tuple[int, int, int, int] = (
+                                cast(int, line_item.supplier_order_id), entry['width'], entry['height'], entry['rabat']
+                            )
                             reception_aggregates[agg_key] = reception_aggregates.get(agg_key, 0) + applied_quantity
                             
                             # Create delivery record
                             try:
-                                delivery = MaterialDelivery(
+                                delivery = MaterialDelivery(  # type: ignore[call-arg]
                                     supplier_order_line_item_id=line_item.id,
                                     received_quantity=applied_quantity,
                                     batch_reference=f"ARR-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
@@ -407,9 +409,9 @@ class RawMaterialArrivalDialog(QDialog):
                                 
                                 # Update delivery status
                                 if line_item.total_received_quantity >= line_item.quantity:
-                                    line_item.delivery_status = DeliveryStatus.COMPLETE
+                                    line_item.delivery_status = DeliveryStatus.COMPLETE  # type: ignore[attr-defined]
                                 else:
-                                    line_item.delivery_status = DeliveryStatus.PARTIAL
+                                    line_item.delivery_status = DeliveryStatus.PARTIAL  # type: ignore[attr-defined]
                                     
                                 updated_line_items.append(line_item)
                                 remaining_quantity -= applied_quantity
@@ -421,9 +423,9 @@ class RawMaterialArrivalDialog(QDialog):
                                 line_item.total_received_quantity = (line_item.total_received_quantity or 0) + applied_quantity
                                 if hasattr(line_item, 'delivery_status'):
                                     if line_item.total_received_quantity >= line_item.quantity:
-                                        line_item.delivery_status = DeliveryStatus.COMPLETE
+                                        line_item.delivery_status = DeliveryStatus.COMPLETE  # type: ignore[attr-defined]
                                     else:
-                                        line_item.delivery_status = DeliveryStatus.PARTIAL
+                                        line_item.delivery_status = DeliveryStatus.PARTIAL  # type: ignore[attr-defined]
                                 updated_line_items.append(line_item)
                                 remaining_quantity -= applied_quantity
 
@@ -439,7 +441,7 @@ class RawMaterialArrivalDialog(QDialog):
                     supplier_order = session.query(SupplierOrder).filter(SupplierOrder.id == supplier_order_id).first()
                     if supplier_order:
                         # Check completion status of ALL line items
-                        total_line_items = len(supplier_order.line_items)
+                        total_line_items = len(cast(list[SupplierOrderLineItem], supplier_order.line_items))
                         completed_line_items = 0
                         partially_received_line_items = 0
                         
@@ -452,17 +454,17 @@ class RawMaterialArrivalDialog(QDialog):
                                 completed_line_items += 1
                                 # Update delivery status if available
                                 if hasattr(line_item, 'delivery_status'):
-                                    line_item.delivery_status = DeliveryStatus.COMPLETE
+                                    line_item.delivery_status = DeliveryStatus.COMPLETE  # type: ignore[attr-defined]
                             elif received_qty > 0:
                                 # This line item is partially received
                                 partially_received_line_items += 1
                                 # Update delivery status if available
                                 if hasattr(line_item, 'delivery_status'):
-                                    line_item.delivery_status = DeliveryStatus.PARTIAL
+                                    line_item.delivery_status = DeliveryStatus.PARTIAL  # type: ignore[attr-defined]
                             else:
                                 # This line item hasn't been received yet
                                 if hasattr(line_item, 'delivery_status'):
-                                    line_item.delivery_status = DeliveryStatus.PENDING
+                                    line_item.delivery_status = DeliveryStatus.PENDING  # type: ignore[attr-defined]
                         
                         # Update supplier order status based on ALL line items
                         if completed_line_items == total_line_items:
@@ -517,7 +519,7 @@ class RawMaterialArrivalDialog(QDialog):
                     except Exception as e:
                         print(f"Warning: Could not fetch description for supplier order {supplier_order_id}: {e}")
                     
-                    reception = Reception(
+                    reception = Reception(  # type: ignore[call-arg]
                         supplier_order_id=supplier_order_id,
                         quantity=qty,
                         notes=description
