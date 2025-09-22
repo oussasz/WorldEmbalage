@@ -1,7 +1,8 @@
 """
 Quad view widget for displaying four data grids in a 2x2 layout
+with an optional header action bar for global actions.
 """
-from PyQt6.QtWidgets import QWidget, QGridLayout, QVBoxLayout, QLabel
+from PyQt6.QtWidgets import QWidget, QGridLayout, QVBoxLayout, QLabel, QHBoxLayout, QPushButton
 from PyQt6.QtCore import Qt
 from ui.widgets.data_grid import DataGrid
 
@@ -20,6 +21,7 @@ class QuadView(QWidget):
         self.top_right_grid = None
         self.bottom_left_grid = None
         self.bottom_right_grid = None
+        self._header_action_layout: QHBoxLayout | None = None
         self._build_ui(
             top_left_title, top_left_columns,
             top_right_title, top_right_columns,
@@ -36,6 +38,18 @@ class QuadView(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        
+        # Optional header bar for actions (right-aligned)
+        header_widget = QWidget()
+        header_layout = QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(8, 8, 8, 0)
+        header_layout.setSpacing(6)
+        header_layout.addStretch()  # push actions to the right
+        self._header_action_layout = QHBoxLayout()
+        self._header_action_layout.setContentsMargins(0, 0, 0, 0)
+        self._header_action_layout.setSpacing(6)
+        header_layout.addLayout(self._header_action_layout)
+        layout.addWidget(header_widget)
         
         # Create grid layout for 2x2 arrangement
         grid_layout = QGridLayout()
@@ -63,6 +77,16 @@ class QuadView(QWidget):
         grid_layout.addWidget(bottom_right_widget, 1, 1)
         
         layout.addLayout(grid_layout)
+
+    def add_header_action_button(self, text: str, callback):
+        """Add a button to the global header action bar (top-right)."""
+        if not self._header_action_layout:
+            return None
+        btn = QPushButton(text)
+        btn.setMaximumHeight(25)
+        btn.clicked.connect(callback)
+        self._header_action_layout.addWidget(btn)
+        return btn
     
     def _create_section(self, title: str, columns: list) -> QWidget:
         """Create a section with title and data grid"""

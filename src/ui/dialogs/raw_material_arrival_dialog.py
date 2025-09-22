@@ -480,8 +480,9 @@ class RawMaterialArrivalDialog(QDialog):
 
                 # Create a single Reception per (supplier_order_id, dimensions)
                 for (supplier_order_id, w, h, r), qty in reception_aggregates.items():
-                    # Get description from related quotation
-                    description = f"Arrivée matière: {w}x{h}x{r}mm"  # Default fallback
+                    # Always keep dimensions in notes to allow reliable grouping later
+                    base_description = f"Arrivée matière: {w}x{h}x{r}mm"
+                    extra_description = None  # Any additional context from related quotation
                     
                     try:
                         # Find supplier order and get description from related quotation
@@ -506,23 +507,26 @@ class RawMaterialArrivalDialog(QDialog):
                                         if quotation.line_items:
                                             for quotation_line in quotation.line_items:
                                                 if quotation_line.description and quotation_line.description.strip():
-                                                    description = quotation_line.description.strip()
+                                                    extra_description = quotation_line.description.strip()
                                                     break  # Use first non-empty description found
                                         
                                         # Fallback to quotation notes if no line item description found
-                                        if description == f"Arrivée matière: {w}x{h}x{r}mm" and quotation.notes and quotation.notes.strip():
-                                            description = quotation.notes.strip()
+                                        if (not extra_description) and quotation.notes and quotation.notes.strip():
+                                            extra_description = quotation.notes.strip()
                                         
                                         # If we found a good description, break out of client_orders loop
-                                        if description != f"Arrivée matière: {w}x{h}x{r}mm":
+                                        if extra_description:
                                             break
                     except Exception as e:
                         print(f"Warning: Could not fetch description for supplier order {supplier_order_id}: {e}")
                     
+                    # Combine base (dimensions) with any extra description found
+                    combined_notes = base_description if not extra_description else f"{base_description} — {extra_description}"
+
                     reception = Reception(  # type: ignore[call-arg]
                         supplier_order_id=supplier_order_id,
                         quantity=qty,
-                        notes=description
+                        notes=combined_notes
                     )
                     session.add(reception)
                     session.flush()  # ensure reception.id is available for linking

@@ -99,6 +99,18 @@ class DataGrid(QWidget):
         self.action_layout.insertWidget(self.action_layout.count() - 1, btn)
         return btn
 
+    def add_header_widget(self, widget):
+        """Add a custom widget (e.g., QLineEdit) to the grid header next to action buttons."""
+        try:
+            if hasattr(widget, 'setMaximumHeight'):
+                widget.setMaximumHeight(25)
+            self.action_layout.insertWidget(self.action_layout.count() - 1, widget)
+            return widget
+        except Exception:
+            # Fallback: append at the end
+            self.action_layout.addWidget(widget)
+            return widget
+
     def load_rows(self, rows: Sequence[Sequence[str]]):
         """Public API to load (or reload) full dataset into the grid.
         Garantit un rendu stable même avec le tri activé.
@@ -211,6 +223,28 @@ class DataGrid(QWidget):
         
         text_lower = text.lower()
         filtered = [row for row in self._all_rows if any(text_lower in str(cell).lower() for cell in row)]
+        self._render_rows(filtered)
+        self._update_info_label(len(filtered), len(self._all_rows))
+
+    def filter_multi(self, texts: list[str]):
+        """Filter rows if ANY of the provided texts matches any cell (OR semantics).
+        Empty or whitespace-only texts are ignored. If no valid texts, shows all rows.
+        """
+        tokens = [t.strip().lower() for t in texts if t and t.strip()]
+        if not tokens:
+            self._render_rows(self._all_rows)
+            self._update_info_label(len(self._all_rows))
+            return
+
+        def row_matches(row: list[str]) -> bool:
+            r = [str(cell).lower() for cell in row]
+            for tok in tokens:
+                for cell in r:
+                    if tok in cell:
+                        return True
+            return False
+
+        filtered = [row for row in self._all_rows if row_matches(row)]
         self._render_rows(filtered)
         self._update_info_label(len(filtered), len(self._all_rows))
 

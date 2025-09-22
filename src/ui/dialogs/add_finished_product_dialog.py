@@ -105,7 +105,7 @@ class AddFinishedProductDialog(QDialog):
         production_layout = QFormLayout(production_group)
         
         self.batch_code_edit = QLineEdit()
-        self.batch_code_edit.setPlaceholderText("Ex: PROD-20250902-143027-0001-ABC")
+        self.batch_code_edit.setPlaceholderText("Ex: PD001")
         production_layout.addRow("Code du lot:", self.batch_code_edit)
         
         self.production_date_edit = QDateEdit()

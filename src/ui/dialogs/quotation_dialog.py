@@ -35,7 +35,7 @@ class QuotationDialog(QDialog):
         from utils.reference_generator import generate_quotation_reference
         self.ref_edit = QLineEdit()
         self.ref_edit.setText(generate_quotation_reference())  # Auto-generate with standardized format
-        self.ref_edit.setPlaceholderText('Ex: DEV-20250902-143027-0001')
+        self.ref_edit.setPlaceholderText('Ex: DV001')
         form_layout.addRow('Référence:', self.ref_edit)
         
         # Client

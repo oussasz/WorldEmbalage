@@ -39,7 +39,7 @@ class RawMaterialOrderDialog(QDialog):
         from utils.reference_generator import generate_supplier_order_reference
         self.ref_edit = QLineEdit()
         self.ref_edit.setText(generate_supplier_order_reference())  # Auto-generate with standardized format
-        self.ref_edit.setPlaceholderText('Ex: BC-20250902-143027-0001')
+        self.ref_edit.setPlaceholderText('Ex: BC001')
         order_layout.addRow('Référence commande:', self.ref_edit)
         
         # Supplier

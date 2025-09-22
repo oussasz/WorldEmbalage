@@ -1,12 +1,12 @@
 """
 Unified reference generation system for World Embalage.
-All document references follow the standardized format: PREFIX-YYYYMMDD-HHMMSS-NNNN
+All document references follow the short format: PPNNN
 
 Where:
-- PREFIX: Document type (DEV, BC, CMD, FPF, MP, etc.)
-- YYYYMMDD: Date (year-month-day)
-- HHMMSS: Time (hour-minute-second)
-- NNNN: Sequential number (4 digits, padded with zeros)
+- PP: Two-letter document type prefix (DV, BC, CM, FP, MP, etc.)
+- NNN: Sequential number (3 digits, padded with zeros)
+
+Examples: DV001, BC001, CM001, FP001, MP001
 """
 
 from __future__ import annotations
@@ -18,62 +18,70 @@ from sqlalchemy import text
 
 
 class ReferenceGenerator:
-    """Unified reference generator for all document types."""
+    """Unified reference generator for all document types with short format."""
     
-    # Standard prefixes for different document types
+    # Short prefixes for different document types (2 letters + 3 digits = 5 chars total)
     PREFIXES = {
-        'quotation': 'DEV',           # Devis
+        'quotation': 'DV',            # Devis
         'supplier_order': 'BC',       # Bon de commande fournisseur
-        'client_order': 'CMD',        # Commande client
-        'finished_product': 'FPF',    # Fiche produit fini
+        'client_order': 'CM',         # Commande client
+        'finished_product': 'FP',     # Fiche produit fini
         'raw_material_label': 'MP',   # Étiquette matière première
-        'delivery': 'LIV',            # Livraison
-        'invoice': 'FAC',             # Facture
-        'reception': 'REC',           # Réception
-        'return': 'RET',              # Retour
-        'production': 'PROD',         # Production
-        'stock_movement': 'MVT',      # Mouvement de stock
+        'delivery': 'LV',             # Livraison
+        'invoice': 'FC',              # Facture
+        'reception': 'RC',            # Réception
+        'return': 'RT',               # Retour
+        'production': 'PD',           # Production
+        'stock_movement': 'MV',       # Mouvement de stock
+    }
+    
+    # Legacy prefixes for backward compatibility
+    LEGACY_PREFIXES = {
+        'quotation': 'DEV',           # Old format
+        'supplier_order': 'BC',       # Stays the same
+        'client_order': 'CMD',        # Old format
+        'finished_product': 'FPF',    # Old format
+        'raw_material_label': 'MP',   # Stays the same
+        'delivery': 'LIV',            # Old format
+        'invoice': 'FAC',             # Old format
+        'reception': 'REC',           # Old format
+        'return': 'RET',              # Old format
+        'production': 'PROD',         # Old format
+        'stock_movement': 'MVT',      # Old format
     }
     
     @classmethod
     def generate(cls, document_type: str, custom_suffix: Optional[str] = None) -> str:
         """
-        Generate a standardized reference for any document type.
+        Generate a short reference for any document type.
         
         Args:
             document_type: Type of document (must be in PREFIXES)
-            custom_suffix: Optional custom suffix to append
+            custom_suffix: Optional custom suffix to append (ignored in short format)
             
         Returns:
-            Standardized reference string
+            Short reference string (5 characters: PPNNN)
             
         Example:
-            generate('quotation') -> 'DEV-20250902-143027-0001'
-            generate('quotation', 'URGENT') -> 'DEV-20250902-143027-0001-URGENT'
+            generate('quotation') -> 'DV001'
+            generate('supplier_order') -> 'BC001'
         """
         if document_type not in cls.PREFIXES:
             raise ValueError(f"Unknown document type: {document_type}. Valid types: {list(cls.PREFIXES.keys())}")
         
         prefix = cls.PREFIXES[document_type]
-        now = datetime.now()
-        date_part = now.strftime('%Y%m%d')
-        time_part = now.strftime('%H%M%S')
         
-        # Get sequential number for this date and document type
-        sequence_num = cls._get_next_sequence_number(prefix, date_part)
+        # Get sequential number for this document type
+        sequence_num = cls._get_next_sequence_number(prefix)
         
-        # Build the reference
-        reference = f"{prefix}-{date_part}-{time_part}-{sequence_num:04d}"
-        
-        # Add custom suffix if provided
-        if custom_suffix:
-            reference += f"-{custom_suffix}"
+        # Build the short reference: PP + NNN
+        reference = f"{prefix}{sequence_num:03d}"
         
         return reference
     
     @classmethod
-    def _get_next_sequence_number(cls, prefix: str, date_part: str) -> int:
-        """Get the next sequence number for a given prefix and date."""
+    def _get_next_sequence_number(cls, prefix: str) -> int:
+        """Get the next sequence number for a given prefix (short format)."""
         session = SessionLocal()
         try:
             # Check all tables that might contain references with this prefix
@@ -90,7 +98,7 @@ class ReferenceGenerator:
             ]
             
             max_sequence = 0
-            pattern = f"{prefix}-{date_part}-%"
+            pattern = f"{prefix}%"
             
             for table in tables_to_check:
                 try:
@@ -100,18 +108,14 @@ class ReferenceGenerator:
                             result = session.execute(
                                 text(f"""
                                     SELECT COALESCE(MAX(
-                                        CAST(SUBSTRING({ref_col}, 
-                                            LENGTH(:prefix) + LENGTH(:date_part) + 3,  -- +3 for two dashes
-                                            4  -- sequence number length
-                                        ) AS INTEGER)
+                                        CAST(SUBSTRING({ref_col}, 3, 3) AS INTEGER)
                                     ), 0) as max_seq
                                     FROM {table} 
                                     WHERE {ref_col} LIKE :pattern
-                                    AND LENGTH({ref_col}) >= LENGTH(:prefix) + LENGTH(:date_part) + 7  -- minimum expected length
+                                    AND LENGTH({ref_col}) = 5
+                                    AND {ref_col} REGEXP '^[A-Z]{{2}}[0-9]{{3}}$'
                                 """),
                                 {
-                                    "prefix": prefix,
-                                    "date_part": date_part,
                                     "pattern": pattern
                                 }
                             ).scalar()
@@ -128,7 +132,7 @@ class ReferenceGenerator:
             
         except Exception:
             # Fallback: use random suffix if database query fails
-            return int(secrets.token_hex(2), 16) % 9999 + 1
+            return int(secrets.token_hex(1), 16) % 999 + 1
         finally:
             session.close()
     
@@ -166,125 +170,104 @@ class ReferenceGenerator:
     
     @classmethod
     def is_standardized_format(cls, reference: str) -> bool:
-        """Check if a reference follows the new standardized format."""
-        if not reference:
+        """Check if a reference follows the new short format (PPNNN)."""
+        if not reference or len(reference) != 5:
             return False
         
-        parts = reference.split('-')
-        if len(parts) < 4:
+        # Check if it matches the pattern: 2 letters + 3 digits
+        if not (reference[:2].isalpha() and reference[2:].isdigit()):
             return False
         
-        prefix, date_part, time_part, sequence = parts[:4]
-        
-        # Check prefix is valid
+        # Check if prefix is valid
+        prefix = reference[:2]
         if prefix not in cls.PREFIXES.values():
-            return False
-        
-        # Check date part (YYYYMMDD)
-        if len(date_part) != 8 or not date_part.isdigit():
-            return False
-        
-        # Check time part (HHMMSS)
-        if len(time_part) != 6 or not time_part.isdigit():
-            return False
-        
-        # Check sequence part (4 digits)
-        if len(sequence) != 4 or not sequence.isdigit():
             return False
         
         return True
     
     @classmethod
     def extract_info_from_reference(cls, reference: str) -> dict:
-        """Extract information from a standardized reference."""
+        """Extract information from a short reference."""
         if not cls.is_standardized_format(reference):
             return {
                 'is_standardized': False,
                 'prefix': None,
-                'date': None,
-                'time': None,
                 'sequence': None,
-                'custom_suffix': None
+                'document_type': None
             }
         
-        parts = reference.split('-')
-        prefix = parts[0]
-        date_part = parts[1]
-        time_part = parts[2]
-        sequence = parts[3]
-        custom_suffix = '-'.join(parts[4:]) if len(parts) > 4 else None
+        prefix = reference[:2]
+        sequence = int(reference[2:])
         
-        try:
-            date_obj = datetime.strptime(date_part, '%Y%m%d').date()
-            time_obj = datetime.strptime(time_part, '%H%M%S').time()
-        except ValueError:
-            date_obj = None
-            time_obj = None
+        # Find document type from prefix
+        document_type = None
+        for doc_type, doc_prefix in cls.PREFIXES.items():
+            if doc_prefix == prefix:
+                document_type = doc_type
+                break
         
         return {
             'is_standardized': True,
             'prefix': prefix,
-            'date': date_obj,
-            'time': time_obj,
-            'sequence': int(sequence),
-            'custom_suffix': custom_suffix
+            'sequence': sequence,
+            'document_type': document_type
         }
 
 
 # Convenience functions for specific document types
 def generate_quotation_reference(custom_suffix: Optional[str] = None) -> str:
-    """Generate a quotation reference (DEV prefix)."""
-    return ReferenceGenerator.generate('quotation', custom_suffix)
+    """Generate a quotation reference (DV prefix)."""
+    return ReferenceGenerator.generate('quotation')
 
 
 def generate_supplier_order_reference(custom_suffix: Optional[str] = None) -> str:
     """Generate a supplier order reference (BC prefix)."""
-    return ReferenceGenerator.generate('supplier_order', custom_suffix)
+    return ReferenceGenerator.generate('supplier_order')
 
 
 def generate_client_order_reference(custom_suffix: Optional[str] = None) -> str:
-    """Generate a client order reference (CMD prefix)."""
-    return ReferenceGenerator.generate('client_order', custom_suffix)
+    """Generate a client order reference (CM prefix)."""
+    return ReferenceGenerator.generate('client_order')
 
 
 def generate_finished_product_reference(custom_suffix: Optional[str] = None) -> str:
-    """Generate a finished product fiche reference (FPF prefix)."""
-    return ReferenceGenerator.generate('finished_product', custom_suffix)
+    """Generate a finished product fiche reference (FP prefix)."""
+    return ReferenceGenerator.generate('finished_product')
 
 
 def generate_raw_material_label_reference(custom_suffix: Optional[str] = None) -> str:
     """Generate a raw material label reference (MP prefix)."""
-    return ReferenceGenerator.generate('raw_material_label', custom_suffix)
+    return ReferenceGenerator.generate('raw_material_label')
 
 
 def generate_delivery_reference(custom_suffix: Optional[str] = None) -> str:
-    """Generate a delivery reference (LIV prefix)."""
-    return ReferenceGenerator.generate('delivery', custom_suffix)
+    """Generate a delivery reference (LV prefix)."""
+    return ReferenceGenerator.generate('delivery')
 
 
 def generate_invoice_reference(custom_suffix: Optional[str] = None) -> str:
-    """Generate an invoice reference (FAC prefix)."""
-    return ReferenceGenerator.generate('invoice', custom_suffix)
+    """Generate an invoice reference (FC prefix)."""
+    return ReferenceGenerator.generate('invoice')
 
 
 def generate_reception_reference(custom_suffix: Optional[str] = None) -> str:
-    """Generate a reception reference (REC prefix)."""
-    return ReferenceGenerator.generate('reception', custom_suffix)
+    """Generate a reception reference (RC prefix)."""
+    return ReferenceGenerator.generate('reception')
 
 
 def generate_return_reference(custom_suffix: Optional[str] = None) -> str:
-    """Generate a return reference (RET prefix)."""
-    return ReferenceGenerator.generate('return', custom_suffix)
+    """Generate a return reference (RT prefix)."""
+    return ReferenceGenerator.generate('return')
 
 
 def generate_production_reference(custom_suffix: Optional[str] = None) -> str:
-    """Generate a production reference (PROD prefix)."""
-    return ReferenceGenerator.generate('production', custom_suffix)
+    """Generate a production reference (PD prefix)."""
+    return ReferenceGenerator.generate('production')
 
 
 def generate_stock_movement_reference(custom_suffix: Optional[str] = None) -> str:
-    """Generate a stock movement reference (MVT prefix)."""
-    return ReferenceGenerator.generate('stock_movement', custom_suffix)
+    """Generate a stock movement reference (MV prefix)."""
+    return ReferenceGenerator.generate('stock_movement')
 
 
 # Legacy compatibility function

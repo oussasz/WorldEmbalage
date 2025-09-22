@@ -6,9 +6,9 @@ import os
 import subprocess
 from decimal import Decimal
 from pathlib import Path
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenuBar, QMenu, QMessageBox, QTabWidget, QToolBar, QLineEdit, QStatusBar, QDialog, QPushButton
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QMenuBar, QMenu, QMessageBox, QTabWidget, QToolBar, QLineEdit, QStatusBar, QDialog, QPushButton, QCompleter
 from PyQt6.QtGui import QAction, QIcon
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QSize, QStringListModel
 from config.database import SessionLocal
 from models.suppliers import Supplier
 from models.clients import Client
@@ -95,6 +95,11 @@ class MainWindow(QMainWindow):
         self.tab_widget.setTabPosition(QTabWidget.TabPosition.North)
         self.tab_widget.setIconSize(QSize(20, 20)) # Set icon size for tabs
         content_layout.addWidget(self.tab_widget)
+        try:
+            # Rebuild suggestions when switching tabs
+            self.tab_widget.currentChanged.connect(lambda _i: self._rebuild_search_completions_safe())
+        except Exception:
+            pass
         
         # Create dashboard
         self.dashboard = Dashboard()
@@ -228,6 +233,33 @@ class MainWindow(QMainWindow):
         self.search_field = QLineEdit()
         self.search_field.setPlaceholderText("Rechercher...")
         self.search_field.setMaximumWidth(250)
+        # Live filtering as user types
+        try:
+            self.search_field.textChanged.connect(self._on_search_changed)
+        except Exception:
+            pass
+        # Attach autocomplete (suggestions) to the search field
+        try:
+            self._search_completer_model = QStringListModel(self)
+            self._search_completer = QCompleter(self._search_completer_model, self)
+            # Case-insensitive, show popup and match anywhere in the string
+            try:
+                self._search_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            except Exception:
+                pass
+            try:
+                # Available in Qt >= 5.14; ignore if not
+                self._search_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            except Exception:
+                pass
+            try:
+                self._search_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            except Exception:
+                pass
+            self.search_field.setCompleter(self._search_completer)
+        except Exception as _completer_err:
+            # Autocomplete is optional; continue without breaking toolbar
+            logging.debug(f"Autocomplete setup skipped: {_completer_err}")
         toolbar.addWidget(self.search_field)
         
         toolbar.addSeparator()
@@ -238,6 +270,430 @@ class MainWindow(QMainWindow):
         refresh_action.setToolTip('Actualiser toutes les données')
         refresh_action.triggered.connect(self.refresh_all)
         toolbar.addAction(refresh_action)
+
+    def _rebuild_search_completions_safe(self) -> None:
+        """Wrapper to rebuild search suggestions safely (no exceptions bubble)."""
+        try:
+            self._rebuild_search_completions()
+        except Exception as e:
+            logging.debug(f"Rebuild search completions skipped: {e}")
+
+    def _collect_grid_texts(self, grid: DataGrid | None) -> list[str]:
+        """Collect suggestion texts from a DataGrid's currently loaded data.
+        Uses the grid's cached _all_rows to avoid scraping QTableWidget items.
+        """
+        results: list[str] = []
+        if not grid:
+            return results
+        try:
+            rows = getattr(grid, "_all_rows", []) or []
+            # Flatten all cells, keep non-empty strings
+            for row in rows:
+                for cell in row:
+                    if not cell:
+                        continue
+                    s = str(cell).strip()
+                    if s:
+                        results.append(s)
+        except Exception:
+            # Fallback: try reading visible table items
+            try:
+                table = getattr(grid, "table", None)
+                if table:
+                    for r in range(table.rowCount()):
+                        for c in range(table.columnCount()):
+                            item = table.item(r, c)
+                            if item and item.text().strip():
+                                results.append(item.text().strip())
+            except Exception:
+                pass
+        return results
+
+    def _rebuild_search_completions(self) -> None:
+        """Build a suggestion list for the search box based on the active tab's data."""
+        # No-op if completer wasn't initialized
+        if not hasattr(self, "_search_completer_model"):
+            return
+
+        idx = self.tab_widget.currentIndex() if hasattr(self, 'tab_widget') else -1
+        suggestions: list[str] = []
+
+        # Dashboard (0) has no grid; Clients/Fournisseurs (1)
+        if idx == 1 and hasattr(self, 'clients_suppliers_split') and self.clients_suppliers_split:
+            suggestions += self._collect_grid_texts(self.clients_suppliers_split.left_grid)
+            suggestions += self._collect_grid_texts(self.clients_suppliers_split.right_grid)
+        elif idx == 2 and hasattr(self, 'orders_grid'):
+            suggestions += self._collect_grid_texts(self.orders_grid)
+        elif idx == 3 and hasattr(self, 'supplier_orders_quad') and self.supplier_orders_quad:
+            for grid in [self.supplier_orders_quad.top_left_grid, self.supplier_orders_quad.top_right_grid,
+                         self.supplier_orders_quad.bottom_left_grid, self.supplier_orders_quad.bottom_right_grid]:
+                suggestions += self._collect_grid_texts(grid)
+        elif idx == 4 and hasattr(self, 'stock_split') and self.stock_split:
+            suggestions += self._collect_grid_texts(self.stock_split.left_grid)
+            suggestions += self._collect_grid_texts(self.stock_split.right_grid)
+        else:
+            # Default: try major grids if present
+            for g in [getattr(self, 'orders_grid', None),
+                      getattr(self, 'receptions_grid', None),
+                      getattr(self, 'production_grid', None)]:
+                suggestions += self._collect_grid_texts(g)
+
+        # Post-process: unique, keep order, add helpful tokens (dimension forms)
+        seen = set()
+        unique_suggestions: list[str] = []
+        import re
+        dim_re = re.compile(r"\b(\d{2,5})[x×](\d{2,5})(?:[x×](\d{1,4}))?\b", re.IGNORECASE)
+        for s in suggestions:
+            if s in seen:
+                continue
+            seen.add(s)
+            unique_suggestions.append(s)
+            # Add normalized dimension variants when found
+            m = dim_re.search(s)
+            if m:
+                if m.group(3):
+                    a, b, c = m.group(1), m.group(2), m.group(3)
+                    for tok in [f"{a}×{b}×{c}", f"{a}x{b}x{c}", f"{a}x{b}x{c}mm"]:
+                        if tok not in seen:
+                            seen.add(tok)
+                            unique_suggestions.append(tok)
+                else:
+                    a, b = m.group(1), m.group(2)
+                    for tok in [f"{a}×{b}", f"{a}x{b}", f"{a}x{b}mm"]:
+                        if tok not in seen:
+                            seen.add(tok)
+                            unique_suggestions.append(tok)
+
+        # Limit to a reasonable number to keep popup snappy
+        MAX_SUGGESTIONS = 1500
+        final_list = unique_suggestions[:MAX_SUGGESTIONS]
+        try:
+            self._search_completer_model.setStringList(final_list)
+        except Exception:
+            pass
+
+    def _on_search_changed(self, text: str):
+        """Apply search/filter to the active tab's grid(s).
+        Supports:
+        - Reference IDs (e.g., DEV-..., BC-..., REC-..., FACT-..., LIV-...)
+        - Dimensions: NxMxK or NxM (e.g., 100x200x50, 100x200)
+        - Plain text across all columns
+        """
+        term = (text or "").strip()
+        # Determine active tab index mapping used in _create_data_grids order
+        current_index = self.tab_widget.currentIndex() if hasattr(self, 'tab_widget') else -1
+
+        # Helper to filter a DataGrid if available
+        def filter_grid(grid):
+            if not grid:
+                return
+            if hasattr(grid, 'filter'):
+                grid.filter(term)
+
+        # Dimension-aware helper: inject only the dimension token to improve matches in our columns
+        import re
+        dim_tokens: list[str] = []
+        m3 = re.search(r"(\d{2,5})x(\d{2,5})x(\d{1,4})", term.lower())
+        m2 = re.search(r"(\d{2,5})x(\d{2,5})", term.lower()) if not m3 else None
+        if m3:
+            a, b, c = m3.group(1), m3.group(2), m3.group(3)
+            # Add both '×' and 'x' variants
+            dim_tokens.append(f"{a}×{b}×{c}")
+            dim_tokens.append(f"{a}x{b}x{c}")
+            dim_tokens.append(f"{a}x{b}x{c}mm")
+        elif m2:
+            a, b = m2.group(1), m2.group(2)
+            dim_tokens.append(f"{a}×{b}")
+            dim_tokens.append(f"{a}x{b}")
+            dim_tokens.append(f"{a}x{b}mm")
+
+        # Tokens for OR search: original term plus dimension token if detected
+        tokens = [term] if term else []
+        tokens.extend(dim_tokens)
+
+        # Determine context: 0 Dashboard, 1 Clients/Fournisseurs, 2 Devis, 3 Commande MP, 4 Stock, 5 Archive
+        if current_index == 2:  # Devis
+            if self.orders_grid:
+                if hasattr(self.orders_grid, 'filter_multi'):
+                    self.orders_grid.filter_multi(tokens)
+                else:
+                    filter_grid(self.orders_grid)
+        elif current_index == 3:  # Commande de matière première
+            quad = self.supplier_orders_quad
+            if quad:
+                for grid in [quad.top_left_grid, quad.top_right_grid, quad.bottom_left_grid, quad.bottom_right_grid]:
+                    if grid and hasattr(grid, 'filter_multi'):
+                        grid.filter_multi(tokens)
+                    else:
+                        filter_grid(grid)
+        elif current_index == 4:  # Stock split view
+            split = self.stock_split
+            if split:
+                # Left: Matières premières; Right: Produits finis
+                for grid in [split.left_grid, split.right_grid]:
+                    if grid and hasattr(grid, 'filter_multi'):
+                        grid.filter_multi(tokens)
+                    else:
+                        filter_grid(grid)
+        else:
+            # For other tabs that may show grids, apply generic filter where possible
+            try:
+                if self.clients_suppliers_split:
+                    for grid in [self.clients_suppliers_split.left_grid, self.clients_suppliers_split.right_grid]:
+                        if grid and hasattr(grid, 'filter_multi'):
+                            grid.filter_multi(tokens)
+                        else:
+                            filter_grid(grid)
+            except Exception:
+                pass
+
+    def _clear_global_filter(self) -> None:
+        """Clear global search field and reapply empty filter across current view."""
+        try:
+            if hasattr(self, 'search_field') and self.search_field:
+                # Avoid emitting duplicate signals if already empty
+                if self.search_field.text():
+                    self.search_field.clear()
+                else:
+                    # Explicitly trigger a filter refresh for safety
+                    self._on_search_changed("")
+        except Exception as e:
+            logging.debug(f"Clear filter failed: {e}")
+
+    # ---------- Dimension search (Stock) ----------
+    def _parse_dims_tokens(self, text: str) -> tuple[str | None, str | None, str | None]:
+        """Parse dimension tokens from a string. Returns (a,b,c) possibly None.
+        Accepts formats like '100x200x50', '100×200×50', '100x200', 'L=100 l=200', etc.
+        """
+        import re
+        s = (text or '').lower().strip()
+        if not s:
+            return (None, None, None)
+        # Normalize separators and remove units
+        s = s.replace('×', 'x').replace('mm', '')
+        # Extract numbers
+        nums = re.findall(r"\d{1,5}", s)
+        if not nums:
+            return (None, None, None)
+        a = nums[0] if len(nums) > 0 else None
+        b = nums[1] if len(nums) > 1 else None
+        c = nums[2] if len(nums) > 2 else None
+        return (a, b, c)
+
+    def _raw_row_matches(self, row: list[str], a: str | None, b: str | None, c: str | None) -> bool:
+        """Row matcher for raw materials (left grid). Our columns include Description that has [WxLxRmm] token when available."""
+        row_l = [str(x).lower() for x in row]
+        # Prefer checking the Description column (index 5) and full row as fallback
+        description = row_l[5] if len(row_l) > 5 else ''
+        haystacks = [description] + row_l
+        def contains(tok: str) -> bool:
+            for h in haystacks:
+                if tok in h:
+                    return True
+            return False
+        # Build expected tokens
+        tok_a = f"{a}" if a else None
+        tok_b = f"{b}" if b else None
+        tok_c = f"{c}" if c else None
+        # If all three present, require all three
+        if a and b and c:
+            return contains(f"{a}x{b}x{c}") or (contains(a) and contains(b) and contains(c))
+        # If two present, require both
+        if a and b:
+            if not (contains(a) and contains(b)):
+                return False
+        elif a and c:
+            if not (contains(a) and contains(c)):
+                return False
+        elif b and c:
+            if not (contains(b) and contains(c)):
+                return False
+        else:
+            # Single token present
+            single = a or b or c
+            return contains(single) if single else True
+        return True
+
+    def _prod_row_matches(self, row: list[str], a: str | None, b: str | None, c: str | None) -> bool:
+        """Row matcher for finished products (right grid). Dimensions are in 'Dimensions Caisse' column (index 2)."""
+        row_l = [str(x).lower() for x in row]
+        dims = row_l[2] if len(row_l) > 2 else ''
+        haystacks = [dims] + row_l
+        def contains(tok: str) -> bool:
+            for h in haystacks:
+                if tok in h:
+                    return True
+            return False
+        if a and b and c:
+            return contains(f"{a}x{b}x{c}") or (contains(a) and contains(b) and contains(c))
+        if a and b:
+            return contains(a) and contains(b)
+        if a and c:
+            return contains(a) and contains(c)
+        if b and c:
+            return contains(b) and contains(c)
+        single = a or b or c
+        return contains(single) if single else True
+
+    def _on_raw_dim_search_changed(self, text: str) -> None:
+        a, b, c = self._parse_dims_tokens(text)
+        grid = self.receptions_grid
+        if not grid:
+            return
+        # Filter using cached rows to avoid mutating original data
+        all_rows = getattr(grid, '_all_rows', [])
+        if not text.strip():
+            grid.load_rows(all_rows)
+            return
+        filtered = [row for row in all_rows if self._raw_row_matches(row, a, b, c)]
+        grid.load_rows(filtered)
+        # Update suggestions
+        try:
+            self._rebuild_dim_completions_raw()
+        except Exception:
+            pass
+
+    def _on_prod_dim_search_changed(self, text: str) -> None:
+        a, b, c = self._parse_dims_tokens(text)
+        grid = self.production_grid
+        if not grid:
+            return
+        all_rows = getattr(grid, '_all_rows', [])
+        if not text.strip():
+            grid.load_rows(all_rows)
+            return
+        filtered = [row for row in all_rows if self._prod_row_matches(row, a, b, c)]
+        grid.load_rows(filtered)
+        try:
+            self._rebuild_dim_completions_prod()
+        except Exception:
+            pass
+
+    def _rebuild_dim_completions_raw(self) -> None:
+        if not hasattr(self, '_raw_dim_model') or not self.receptions_grid:
+            return
+        import re
+        rows = getattr(self.receptions_grid, '_all_rows', [])
+        suggestions: list[str] = []
+        dim_re = re.compile(r"\b(\d{2,5})[x×](\d{2,5})(?:[x×](\d{1,4}))?\b", re.IGNORECASE)
+        for row in rows:
+            for cell in row:
+                if not cell:
+                    continue
+                s = str(cell)
+                m = dim_re.search(s)
+                if m:
+                    if m.group(3):
+                        a,b,c = m.group(1), m.group(2), m.group(3)
+                        for tok in [f"{a}x{b}x{c}", f"{a}×{b}×{c}"]:
+                            suggestions.append(tok)
+                    else:
+                        a,b = m.group(1), m.group(2)
+                        for tok in [f"{a}x{b}", f"{a}×{b}"]:
+                            suggestions.append(tok)
+        # Add single-dimension tokens as well to help partial search
+        singles = set()
+        for row in rows:
+            for cell in row:
+                if not cell:
+                    continue
+                for num in re.findall(r"\b\d{2,5}\b", str(cell)):
+                    singles.add(num)
+        suggestions.extend(list(singles))
+        # Deduplicate and cap
+        seen = set()
+        unique = []
+        for s in suggestions:
+            if s not in seen:
+                seen.add(s)
+                unique.append(s)
+        try:
+            self._raw_dim_model.setStringList(unique[:1000])
+        except Exception:
+            pass
+
+    def _rebuild_dim_completions_prod(self) -> None:
+        if not hasattr(self, '_prod_dim_model') or not self.production_grid:
+            return
+        import re
+        rows = getattr(self.production_grid, '_all_rows', [])
+        suggestions: list[str] = []
+        dim_re = re.compile(r"\b(\d{2,5})[x×](\d{2,5})(?:[x×](\d{1,4}))?\b", re.IGNORECASE)
+        for row in rows:
+            for cell in row:
+                if not cell:
+                    continue
+                s = str(cell)
+                m = dim_re.search(s)
+                if m:
+                    if m.group(3):
+                        a,b,c = m.group(1), m.group(2), m.group(3)
+                        for tok in [f"{a}x{b}x{c}", f"{a}×{b}×{c}"]:
+                            suggestions.append(tok)
+                    else:
+                        a,b = m.group(1), m.group(2)
+                        for tok in [f"{a}x{b}", f"{a}×{b}"]:
+                            suggestions.append(tok)
+        singles = set()
+        for row in rows:
+            for cell in row:
+                if not cell:
+                    continue
+                for num in re.findall(r"\b\d{2,5}\b", str(cell)):
+                    singles.add(num)
+        suggestions.extend(list(singles))
+        seen = set()
+        unique = []
+        for s in suggestions:
+            if s not in seen:
+                seen.add(s)
+                unique.append(s)
+        try:
+            self._prod_dim_model.setStringList(unique[:1000])
+        except Exception:
+            pass
+
+    def _prompt_client_filter(self, scope: str = "") -> None:
+        """Show a list of clients to choose from; set the toolbar search to that name to filter.
+        scope is informational only; filtering uses the global search handler for the active tab.
+        """
+        session = None
+        try:
+            from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QDialogButtonBox
+            session = SessionLocal()
+            clients = session.query(Client).order_by(Client.name.asc()).all()
+            if not clients:
+                QMessageBox.information(self, 'Information', 'Aucun client disponible.')
+                return
+
+            dlg = QDialog(self)
+            dlg.setWindowTitle("Filtrer par client")
+            layout = QVBoxLayout(dlg)
+            layout.addWidget(QLabel("Choisir un client:"))
+
+            combo = QComboBox(dlg)
+            combo.setEditable(True)  # allow typing to quickly search in the list
+            for c in clients:
+                display = (c.name or f"Client {c.id}").strip()
+                combo.addItem(display, c.id)
+            combo.setCurrentIndex(0)
+            layout.addWidget(combo)
+
+            buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+            buttons.accepted.connect(dlg.accept)
+            buttons.rejected.connect(dlg.reject)
+            layout.addWidget(buttons)
+
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                name = combo.currentText().strip()
+                if name:
+                    # Set into the global search field to reuse the same filtering logic
+                    self.search_field.setText(name)
+        except Exception as e:
+            logging.error(f"Client filter prompt failed: {e}")
+        finally:
+            if session is not None:
+                session.close()
 
     def _create_data_grids(self) -> None:
         """Create data grids for each entity type with new menu structure."""
@@ -261,6 +717,13 @@ class MainWindow(QMainWindow):
              "Articles", "Dimensions", "Quantités", "Types Carton", "Total HT (DA)", "Notes"]
         )
         self.orders_grid.add_action_button("➕ Devis", self._new_quotation)
+        # Quick customer filter button and a clear filter next to it
+        self.orders_grid.add_action_button("🔎 Filtrer Client", lambda: self._prompt_client_filter('devis'))
+        clear_btn_devis = self.orders_grid.add_action_button("✖ Effacer Filtre", self._clear_global_filter)
+        try:
+            clear_btn_devis.setProperty("class", "secondary")
+        except Exception:
+            pass
         
         # Connect double-click to show detail dialog
         self.orders_grid.rowDoubleClicked.connect(self._on_quotation_double_click)
@@ -281,6 +744,14 @@ class MainWindow(QMainWindow):
             "Terminée", ["ID", "Bon Commande", "Fournisseur", "Statut", "Date", "Total UTTC", "Nb Articles", "Clients"]
         )
         self.supplier_orders_quad.add_top_left_action_button("➕ Nouvelle", self._new_supplier_order)
+        # Place filter controls in the QuadView header bar (top-right, consistent design)
+        try:
+            filter_btn_so = self.supplier_orders_quad.add_header_action_button("🔎 Filtrer Client", lambda: self._prompt_client_filter('supplier_orders'))
+            clear_btn_so = self.supplier_orders_quad.add_header_action_button("✖ Effacer Filtre", self._clear_global_filter)
+            if clear_btn_so:
+                clear_btn_so.setProperty("class", "secondary")
+        except Exception:
+            pass
         
         self.tab_widget.addTab(self.supplier_orders_quad, IconManager.get_supplier_order_icon(), "Commande de matière première")
         
@@ -291,12 +762,65 @@ class MainWindow(QMainWindow):
         )
         # Add Raw Material Arrival button to the left side (Raw materials)
         self.stock_split.add_left_action_button("📦 Arrivée Matière Première", self._raw_material_arrival)
+        # Quick client filters for stock
+        if self.stock_split.left_grid:
+            self.stock_split.left_grid.add_action_button("🔎 Filtrer Client", lambda: self._prompt_client_filter('stock_left'))
+            clear_btn_stock_left = self.stock_split.left_grid.add_action_button("✖ Effacer Filtre", self._clear_global_filter)
+            try:
+                clear_btn_stock_left.setProperty("class", "secondary")
+            except Exception:
+                pass
+        if self.stock_split.right_grid:
+            self.stock_split.right_grid.add_action_button("🔎 Filtrer Client", lambda: self._prompt_client_filter('stock_right'))
+            clear_btn_stock_right = self.stock_split.right_grid.add_action_button("✖ Effacer Filtre", self._clear_global_filter)
+            try:
+                clear_btn_stock_right.setProperty("class", "secondary")
+            except Exception:
+                pass
         # Note: We'll use receptions for raw materials and production for finished products
         self.tab_widget.addTab(self.stock_split, IconManager.get_reception_icon(), "Stock")
         
         # Store references for refresh functionality
         self.receptions_grid = self.stock_split.left_grid  # Raw materials
         self.production_grid = self.stock_split.right_grid  # Finished products
+        # Add per-grid dimension search fields with autocomplete for Stock
+        try:
+            from PyQt6.QtWidgets import QLineEdit
+            # Raw materials (left): largeur × longueur × rabat
+            self._raw_dim_search = QLineEdit()
+            self._raw_dim_search.setPlaceholderText("Dimensions (L×l×r) ex: 100x200x50")
+            self._raw_dim_search.setClearButtonEnabled(True)
+            self._raw_dim_model = QStringListModel(self)
+            self._raw_dim_completer = QCompleter(self._raw_dim_model, self)
+            try:
+                self._raw_dim_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+                self._raw_dim_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+                self._raw_dim_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            except Exception:
+                pass
+            self._raw_dim_search.setCompleter(self._raw_dim_completer)
+            if self.receptions_grid and hasattr(self.receptions_grid, 'add_header_widget'):
+                self.receptions_grid.add_header_widget(self._raw_dim_search)
+            self._raw_dim_search.textChanged.connect(self._on_raw_dim_search_changed)
+
+            # Finished products (right): largeur × longueur × hauteur
+            self._prod_dim_search = QLineEdit()
+            self._prod_dim_search.setPlaceholderText("Dimensions (L×l×h) ex: 100x200x50")
+            self._prod_dim_search.setClearButtonEnabled(True)
+            self._prod_dim_model = QStringListModel(self)
+            self._prod_dim_completer = QCompleter(self._prod_dim_model, self)
+            try:
+                self._prod_dim_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+                self._prod_dim_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+                self._prod_dim_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            except Exception:
+                pass
+            self._prod_dim_search.setCompleter(self._prod_dim_completer)
+            if self.production_grid and hasattr(self.production_grid, 'add_header_widget'):
+                self.production_grid.add_header_widget(self._prod_dim_search)
+            self._prod_dim_search.textChanged.connect(self._on_prod_dim_search_changed)
+        except Exception as dim_err:
+            logging.debug(f"Dimension search fields setup skipped: {dim_err}")
         
         # 6. Archive
         from ui.widgets.archive_widget import ArchiveWidget
@@ -2200,7 +2724,11 @@ class MainWindow(QMainWindow):
                 ~Reception.notes.like('[ARCHIVED]%')
             ).all()
             
-            # Group receptions by dimensions (extracted from notes) and sum quantities
+            # Group receptions by dimensions (extracted from notes) AND by client; sum quantities
+            # Rules:
+            # - Dimensions are parsed strictly from notes pattern: 'Arrivée matière: WxLxRmm'
+            # - Merge only when BOTH dimensions AND the set of client IDs match
+            # - If dimensions cannot be parsed (unknown), do not merge those receptions
             grouped_receptions = {}
             reception_groups = {}  # To track which receptions belong to each group
             
@@ -2209,18 +2737,18 @@ class MainWindow(QMainWindow):
                 dimensions_key = "unknown"
                 if r.notes and "Arrivée matière:" in r.notes:
                     try:
-                        # Extract dimensions like "100x200x50mm"
-                        parts = r.notes.split(":")
-                        if len(parts) > 1:
-                            dim_part = parts[1].strip()
-                            if "mm" in dim_part:
-                                dimensions_key = dim_part  # e.g., "100x200x50mm"
-                    except:
+                        # Extract strictly the pattern '<W>x<L>x<R>mm' immediately following the label
+                        import re
+                        m = re.search(r"Arrivée matière:\s*([0-9]+x[0-9]+x[0-9]+)mm", r.notes)
+                        if m:
+                            dimensions_key = f"{m.group(1)}mm"  # e.g., '100x200x50mm'
+                    except Exception:
                         pass
                 
                 # Get supplier order information
                 bon_commande_ref = ""
                 clients_list = []
+                clients_ids_set = set()
                 supplier_name = "N/A"
                 
                 if r.supplier_order:
@@ -2229,21 +2757,31 @@ class MainWindow(QMainWindow):
                                              getattr(r.supplier_order, 'reference', ''))
                     supplier_name = r.supplier_order.supplier.name if r.supplier_order.supplier else "N/A"
                     
-                    # Get unique clients from line items
+                    # Get unique clients from line items (for display) and stable client IDs (for grouping)
                     if hasattr(r.supplier_order, 'line_items') and r.supplier_order.line_items:
                         unique_clients = set()
                         for item in r.supplier_order.line_items:
                             if hasattr(item, 'client') and item.client:
                                 unique_clients.add(item.client.name)
+                            if hasattr(item, 'client_id') and item.client_id:
+                                clients_ids_set.add(item.client_id)
                         clients_list = sorted(unique_clients)
                 
-                # Format clients display
+                # Format clients display (keep exact list for grouping)
                 clients_display = ", ".join(clients_list) if clients_list else "N/A"
                 if len(clients_display) > 40:
                     clients_display = clients_display[:37] + "..."
                 
-                # Create a group key based on dimensions and supplier
-                group_key = f"{dimensions_key}|{supplier_name}"
+                # Build a canonical clients key from sorted client IDs for grouping
+                clients_key = ",".join(map(str, sorted(clients_ids_set))) if clients_ids_set else "N/A"
+
+                # Do NOT merge when dimensions are unknown (avoid accidental merges)
+                if dimensions_key == "unknown":
+                    # Treat each reception as its own group using a unique key
+                    group_key = f"{dimensions_key}|{clients_key}|{r.id}"
+                else:
+                    # Merge strictly when BOTH dimensions and client(s) match
+                    group_key = f"{dimensions_key}|{clients_key}"
                 
                 if group_key not in grouped_receptions:
                     # First reception for these dimensions
@@ -2342,13 +2880,22 @@ class MainWindow(QMainWindow):
                         print(f"Error fetching description for reception {first_reception_id}: {e}")
                         # Keep description as N/A if failure
                 
+                # Enrich description with dimension token so '100x200x50' searches match reliably
+                desc_with_dims = description
+                if group.get('dimensions') and group['dimensions'] != 'unknown':
+                    try:
+                        dims_ascii = group['dimensions'].replace('×', 'x')
+                        desc_with_dims = f"{description} [{dims_ascii}]" if description != "N/A" else dims_ascii
+                    except Exception:
+                        pass
+
                 receptions_data.append([
                     ",".join(map(str, group['ids'])),  # Store all IDs for context menu
                     str(group['quantity']),  # Quantity (summed)
                     group['supplier'],  # Supplier
                     group['bon_commande'],  # Bon Commande (merged)
                     group['clients'],  # Client(s) (merged)
-                    description,  # Description from quotation
+                    desc_with_dims,  # Description + dimensions token
                     group['date'],  # Date (most recent)
                 ])
             
@@ -2585,6 +3132,17 @@ class MainWindow(QMainWindow):
             # Update dashboard
             if hasattr(self, 'dashboard'):
                 self.dashboard.refresh_data()
+            # After data refresh, rebuild completer suggestions
+            try:
+                self._rebuild_search_completions_safe()
+            except Exception:
+                pass
+            # Also rebuild dimension completers for stock searches
+            try:
+                self._rebuild_dim_completions_raw()
+                self._rebuild_dim_completions_prod()
+            except Exception:
+                pass
                 
         except Exception as e:
             QMessageBox.critical(self, 'Erreur', f'Erreur lors de l\'actualisation: {str(e)}')
@@ -3098,7 +3656,9 @@ class MainWindow(QMainWindow):
         from PyQt6.QtWidgets import QMessageBox
         from config.database import SessionLocal
         from models.production import ProductionBatch
-        from models.orders import ClientOrder, Quotation
+        from models.orders import ClientOrder, Quotation, SupplierOrder, QuotationLineItem, SupplierOrderLineItem
+        import json
+        from datetime import datetime
         
         if not row_data or len(row_data) < 1:
             QMessageBox.warning(self, 'Erreur', 'Données de production invalides')
@@ -3147,6 +3707,89 @@ class MainWindow(QMainWindow):
             
             archived_items = []
             
+            # Build archive detail payload joined from devis (quotation) and supplier order
+            def _build_archive_detail(batches):
+                try:
+                    first = batches[0]
+                except Exception:
+                    return None
+                co = session.query(ClientOrder).filter(ClientOrder.id == first.client_order_id).first() if first.client_order_id else None
+                client_name = co.client.name if co and co.client else "N/A"
+                # Quotation details
+                q_ref = None
+                q_desc = None
+                caisse_dims = None
+                cardboard_type = None
+                color = None
+                unit_price = None
+                total_price = None
+                if co and co.quotation:
+                    q_ref = co.quotation.reference
+                    if co.quotation.line_items:
+                        li: QuotationLineItem = co.quotation.line_items[0]
+                        q_desc = (li.description or '').strip() or None
+                        if li.length_mm and li.width_mm and li.height_mm:
+                            caisse_dims = f"{li.length_mm}×{li.width_mm}×{li.height_mm}mm"
+                        cardboard_type = li.cardboard_type
+                        try:
+                            _col = getattr(li, 'color', None)
+                            color = _col.value if _col is not None else None
+                        except Exception:
+                            color = None
+                        try:
+                            unit_price = float(li.unit_price) if li.unit_price is not None else 0.0  # type: ignore[arg-type]
+                        except Exception:
+                            unit_price = 0.0
+                        try:
+                            total_price = float(li.total_price) if li.total_price is not None else 0.0  # type: ignore[arg-type]
+                        except Exception:
+                            total_price = 0.0
+                # Supplier order details
+                so_ref = None
+                plaque_dims = None
+                plaque_price = None
+                so_total_amount = None
+                if co and getattr(co, 'supplier_order', None):
+                    so: SupplierOrder = co.supplier_order
+                    so_ref = getattr(so, 'bon_commande_ref', None) or getattr(so, 'reference', None)
+                    try:
+                        so_total_amount = float(getattr(so, 'total_amount', 0) or 0)  # type: ignore[arg-type]
+                    except Exception:
+                        so_total_amount = 0.0
+                    if so.line_items:
+                        sli: SupplierOrderLineItem = so.line_items[0]
+                        w = getattr(sli, 'plaque_width_mm', None)
+                        L = getattr(sli, 'plaque_length_mm', None)
+                        r = getattr(sli, 'plaque_flap_mm', None)
+                        if w and L:
+                            plaque_dims = f"{w}×{L}mm" + (f" (Rabat: {r}mm)" if r else "")
+                        try:
+                            plaque_price = float(getattr(sli, 'prix_uttc_plaque', 0) or 0)  # type: ignore[arg-type]
+                        except Exception:
+                            plaque_price = 0.0
+
+                detail = {
+                    'archived_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'production_batch_ids': [int(b.id) for b in batches],
+                    'client': client_name,
+                    'quotation': {
+                        'reference': q_ref,
+                        'description': q_desc,
+                        'caisse_dimensions': caisse_dims,
+                        'cardboard_type': cardboard_type,
+                        'color': color,
+                        'unit_price': unit_price,
+                        'total_price': total_price,
+                    },
+                    'supplier_order': {
+                        'reference': so_ref,
+                        'plaque_dimensions': plaque_dims,
+                        'prix_uttc_plaque': plaque_price,
+                        'total_amount': so_total_amount,
+                    }
+                }
+                return detail
+
             # Archive ONLY the production batches themselves (no cascading)
             for pb in production_batches:
                 # Mark production batch as archived by modifying batch_code
@@ -3155,6 +3798,21 @@ class MainWindow(QMainWindow):
                 
                 archived_items.append(f"Produit fini: {pb.batch_code}")
             
+            # Append structured archive note into ClientOrder.notes for traceability
+            try:
+                if production_batches:
+                    co_id = production_batches[0].client_order_id
+                    if co_id:
+                        co = session.query(ClientOrder).filter(ClientOrder.id == co_id).first()
+                        if co is not None:
+                            detail = _build_archive_detail(production_batches)
+                            if detail:
+                                block = "[ARCHIVE_DETAIL] " + json.dumps(detail, ensure_ascii=False)
+                                existing = (co.notes or '').strip()
+                                co.notes = (existing + "\n" + block).strip() if existing else block
+            except Exception as note_err:
+                print(f"Warning: failed to append archive note: {note_err}")
+
             # Commit the changes (only production batches are archived)
             session.commit()
             
@@ -4225,11 +4883,15 @@ Détails individuels:"""
             QMessageBox.critical(self, "Erreur", f"Erreur lors de l'impression de l'étiquette: {str(e)}")
 
     def _print_delivery_note(self, row_data: list):
-        """Print delivery note for finished product (handles both single and merged items)"""
-        from PyQt6.QtWidgets import QMessageBox
+        """Print delivery note for finished products with partial/all quantity selection.
+        - Presents a dialog to choose delivered quantity (all or specific)
+        - Generates the delivery note PDF
+        - Records a Delivery row with status and a notes token to trace which batches/dimensions were delivered
+        """
+        from PyQt6.QtWidgets import QDialog, QMessageBox
         from config.database import SessionLocal
         from models.production import ProductionBatch
-        from models.orders import ClientOrder, Quotation
+        from models.orders import ClientOrder, Quotation, Delivery, DeliveryStatus
         from models.clients import Client
         from services.document_service import DocumentService
         from utils.reference_generator import generate_delivery_reference
@@ -4349,11 +5011,21 @@ Détails individuels:"""
                     designation_from_quotation = f"Cartons {row_data[2]}" if len(row_data) > 2 else "Cartons"
                     print(f"DEBUG Delivery Note: Using fallback description: '{designation_from_quotation}'")
                 
-                # Create delivery item with quotation description (consistent with invoice)
+                # Ask user which quantity to deliver
+                from ui.dialogs.delivery_quantity_dialog import DeliveryQuantityDialog
+                qty_dialog = DeliveryQuantityDialog(total_quantity, self)
+                if qty_dialog.exec() != QDialog.DialogCode.Accepted:
+                    return
+                delivered_qty = qty_dialog.chosen_quantity()
+                if delivered_qty <= 0:
+                    QMessageBox.warning(self, "Quantité invalide", "Veuillez saisir une quantité positive à livrer.")
+                    return
+
+                # Create delivery item with chosen quantity
                 delivery_items = [{
                     'description': designation_from_quotation,
-                    'quantity': total_quantity,
-                    'unit_price': 0.0,  # Will be calculated if needed
+                    'quantity': delivered_qty,
+                    'unit_price': 0.0,
                     'batch_ids': batch_ids,
                     'client_order_id': first_batch.client_order_id
                 }]
@@ -4379,6 +5051,52 @@ Détails individuels:"""
                 )
                 
                 if pdf_path:
+                    # Record a Delivery row for traceability
+                    try:
+                        dims = row_data[2] if len(row_data) > 2 else "N/A"
+                        # Notes include tokens to later compute remaining: BATCH_IDS and DIMS
+                        notes_token = f"BATCH_IDS={','.join(map(str, batch_ids))};DIMS={dims}"
+                        delivery_status = DeliveryStatus.COMPLETE if delivered_qty >= total_quantity else DeliveryStatus.PARTIAL
+
+                        delivery_row = Delivery(
+                            client_order_id=first_batch.client_order_id,
+                            delivery_date=delivery_date,
+                            status=delivery_status,
+                            quantity=delivered_qty,
+                            notes=notes_token
+                        )
+                        session.add(delivery_row)
+                        # Adjust stock of finished products: reduce batch quantities or archive
+                        try:
+                            remaining_to_deliver = int(delivered_qty)
+                            if remaining_to_deliver >= total_quantity:
+                                # Fully delivered: archive all involved batches so they disappear from stock view
+                                for b in batches:
+                                    if not getattr(b, 'batch_code', '').startswith('[ARCHIVED]'):
+                                        b.batch_code = f"[ARCHIVED] {b.batch_code}"
+                            else:
+                                # Partial delivery: decrement quantities across batches in order
+                                for b in batches:
+                                    if remaining_to_deliver <= 0:
+                                        break
+                                    q = int(getattr(b, 'quantity', 0) or 0)
+                                    if q <= 0:
+                                        continue
+                                    take = min(q, remaining_to_deliver)
+                                    b.quantity = max(0, q - take)
+                                    remaining_to_deliver -= take
+                                    # If a batch hits zero, archive it
+                                    if b.quantity == 0 and not getattr(b, 'batch_code', '').startswith('[ARCHIVED]'):
+                                        b.batch_code = f"[ARCHIVED] {b.batch_code}"
+                        except Exception as stock_err:
+                            # Don't block delivery recording if stock update fails
+                            print(f"Warning: Failed to update production stock on delivery: {stock_err}")
+
+                        session.commit()
+                    except Exception as rec_err:
+                        session.rollback()
+                        print(f"Warning: Failed to record Delivery row: {rec_err}")
+
                     # Try to open the PDF
                     try:
                         if platform.system() == "Darwin":  # macOS
@@ -4396,6 +5114,11 @@ Détails individuels:"""
                     
             finally:
                 session.close()
+                # Refresh UI to reflect updated stock quantities/archived batches
+                try:
+                    self.refresh_all()
+                except Exception:
+                    pass
                 
         except Exception as e:
             print(f"Error generating delivery note: {e}")

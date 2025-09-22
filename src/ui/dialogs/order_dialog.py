@@ -12,7 +12,7 @@ class OrderDialog(QDialog):
         from utils.reference_generator import generate_client_order_reference
         self.ref_edit = QLineEdit()
         self.ref_edit.setText(generate_client_order_reference())
-        self.ref_edit.setPlaceholderText('Ex: CMD-20250902-143027-0001')
+        self.ref_edit.setPlaceholderText('Ex: CM001')
         
         self.date_edit = QDateEdit()
         self.date_edit.setDate(QDate.currentDate())

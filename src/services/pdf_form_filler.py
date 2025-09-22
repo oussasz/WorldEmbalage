@@ -526,10 +526,7 @@ class PDFFormFiller:
             }
 
             coordinates = [
-               
-                
-                
-                
+
                 {"field": "client_company", "x": 60, "y": 185},
                 {"field": "client_email", "x": 60, "y": 200},
                 {"field": "client_phone", "x": 60, "y": 215},
@@ -537,7 +534,7 @@ class PDFFormFiller:
                 
 
              {"field": "devie_number", "x": 515, "y": 139},
-                {"field": "devie_date", "x": 485, "y": 153}
+                {"field": "devie_date", "x": 500, "y": 153}
             ]
 
             for item in coordinates:

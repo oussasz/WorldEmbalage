@@ -7,7 +7,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon, QPalette, QColor
 from config.database import SessionLocal
 from models.production import ProductionBatch
-from models.orders import ClientOrder, Quotation, SupplierOrder, Reception
+from models.orders import ClientOrder, Quotation, SupplierOrder, Reception, QuotationLineItem, SupplierOrderLineItem, Delivery, Invoice
 from models.clients import Client
 from models.suppliers import Supplier
 from datetime import datetime, date
@@ -159,6 +159,7 @@ class ArchiveTableWidget(QTableWidget):
     """Enhanced table widget for archive data"""
     
     itemRestoreRequested = pyqtSignal(str, int)  # (item_type, item_id)
+    itemDeleteRequested = pyqtSignal(str, int)   # (item_type, item_id)
     
     def __init__(self, headers: list, parent=None):
         super().__init__(0, len(headers), parent)
@@ -188,18 +189,30 @@ class ArchiveTableWidget(QTableWidget):
         self.customContextMenuRequested.connect(self._show_context_menu)
     
     def _show_context_menu(self, position):
-        """Show context menu with restore option"""
+        """Show context menu with restore and delete options; works on empty-looking rows too"""
         from PyQt6.QtGui import QAction
         from PyQt6.QtWidgets import QMenu
-        
-        if self.itemAt(position) is None:
+
+        # Ensure a row is selected even if cell is visually empty
+        row = self.rowAt(position.y())
+        if row < 0:
             return
-            
+        if self.currentRow() != row:
+            # Select a reasonable column (1 = first visible column) if available
+            try:
+                self.setCurrentCell(row, 1)
+            except Exception:
+                self.setCurrentCell(row, 0)
+
         menu = QMenu(self)
         
         restore_action = QAction("🔄 Restore from Archive", self)
         restore_action.triggered.connect(self._restore_selected_item)
         menu.addAction(restore_action)
+        
+        delete_action = QAction("🗑️ Delete", self)
+        delete_action.triggered.connect(self._delete_selected_item)
+        menu.addAction(delete_action)
         
         menu.exec(self.mapToGlobal(position))
     
@@ -221,13 +234,31 @@ class ArchiveTableWidget(QTableWidget):
         except (ValueError, AttributeError):
             pass
     
+    def _delete_selected_item(self):
+        """Emit delete request for selected row"""
+        current_row = self.currentRow()
+        if current_row < 0:
+            return
+        id_item = self.item(current_row, 0)
+        if not id_item:
+            return
+        try:
+            item_id = int(id_item.text())
+            self.itemDeleteRequested.emit(self.objectName(), item_id)
+        except (ValueError, AttributeError):
+            pass
+    
     def load_data(self, data: list):
         """Load data into table"""
         self.setRowCount(len(data))
         
         for row, row_data in enumerate(data):
             for col, value in enumerate(row_data):
-                item = QTableWidgetItem(str(value))
+                text = str(value) if value is not None else ''
+                # Normalize empties for user visibility (keep ID untouched)
+                if col > 0 and (not text.strip() or text.strip().lower() == 'none'):
+                    text = 'N/A'
+                item = QTableWidgetItem(text)
                 
                 # Add special styling for archived items
                 if col == 0:  # ID column
@@ -287,21 +318,37 @@ class ArchiveWidget(QWidget):
         
         layout.addLayout(header_layout)
         
-        # Archive data tabs (no statistics)
-        self.tab_widget = QTabWidget()
-        self._create_archive_tabs()
-        layout.addWidget(self.tab_widget)
+        # Split view: left list, right details
+        from PyQt6.QtWidgets import QSplitter
+        splitter = QSplitter()
+        splitter.setOrientation(Qt.Orientation.Horizontal)
+
+        # Left: simplified list per request (Description, Client, Dimension de caisse)
+        self.list_table = ArchiveTableWidget(["ID", "Description", "Client", "Dimension de caisse"])  # keep ID hidden
+        self.list_table.setObjectName("archived_transaction")
+        self.list_table.itemSelectionChanged.connect(self._on_row_selected)
+        # Keep restore via context menu
+        self.list_table.itemRestoreRequested.connect(self._handle_restore_request)
+        self.list_table.itemDeleteRequested.connect(self._handle_delete_request)
+        splitter.addWidget(self.list_table)
+
+        # Hide ID column visually but keep for internal use
+        try:
+            self.list_table.setColumnHidden(0, True)
+        except Exception:
+            pass
+
+        # Right: details panel
+        self.details_panel = QTextEdit()
+        self.details_panel.setReadOnly(True)
+        splitter.addWidget(self.details_panel)
+
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 4)
+
+        layout.addWidget(splitter)
     
-    def _create_archive_tabs(self):
-        """Create unified archive table for archived transactions"""
-        # Single unified archive table
-        self.archive_table = ArchiveTableWidget([
-            "ID", "Client", "Description", "Caisse Dimensions", "Plaque Dimensions", 
-            "Prix Achat Plaque", "Prix Vente Caisse", "Date Livraison", "Facture Générée", "Date Archivage"
-        ])
-        self.archive_table.setObjectName("archived_transaction")
-        self.archive_table.itemRestoreRequested.connect(self._handle_restore_request)
-        self.tab_widget.addTab(self.archive_table, "📦 Archived Transactions")
+    # Removed legacy tab-based archive view in favor of split list/details
     
     def _setup_refresh_timer(self):
         """Setup automatic refresh timer"""
@@ -318,7 +365,7 @@ class ArchiveWidget(QWidget):
             traceback.print_exc()
     
     def _load_archived_transactions(self):
-        """Load unified archived transactions combining all workflow data"""
+        """Load archived production entries into simplified list and cache details"""
         try:
             session = SessionLocal()
             try:
@@ -328,109 +375,201 @@ class ArchiveWidget(QWidget):
                 ).all()
                 
                 data = []
+                self._details_cache = {}
                 for pb in production_batches:
                     try:
                         # Get client order and related information
                         client_name = "N/A"
                         description = "N/A"
                         caisse_dimensions = "N/A"
-                        plaque_dimensions = "N/A"
-                        prix_achat_plaque = "N/A"
-                        prix_vente_caisse = "N/A"
-                        date_livraison = "N/A"
-                        facture_generee = "Non"
                         archive_date = self._extract_archive_date_from_batch_code(pb.batch_code)
                         
-                        # Get description (priority: production batch -> quotation -> generated)
-                        description = "N/A"
+                        # Try to fetch ClientOrder and relations
+                        co = session.query(ClientOrder).filter(ClientOrder.id == pb.client_order_id).first() if getattr(pb, 'client_order_id', None) else None
                         
-                        # First priority: Check production batch description
-                        if hasattr(pb, 'description') and pb.description and pb.description.strip():
-                            description = pb.description.strip()
+                        # Determine client name (prefer ClientOrder, fallback to SupplierOrder line item client)
+                        if co and co.client:
+                            client_name = co.client.name
+                        elif co and getattr(co, 'supplier_order', None) and co.supplier_order.line_items:
+                            first_li = co.supplier_order.line_items[0]
+                            if getattr(first_li, 'client', None):
+                                client_name = first_li.client.name
                         
-                        # Second priority: Get from client order quotation if batch description not available
-                        if description == "N/A" and pb.client_order_id:
-                            client_order = session.query(ClientOrder).filter(
-                                ClientOrder.id == pb.client_order_id
-                            ).first()
-                            
-                            if client_order:
-                                # Client
-                                if client_order.client:
-                                    client_name = client_order.client.name
-                                
-                                # Date de livraison (use production date)
-                                if pb.production_date:
-                                    date_livraison = str(pb.production_date)
-                                
-                                # Prix de vente (from quotation)
-                                if client_order.quotation:
-                                    quotation = client_order.quotation
-                                    if quotation.total_amount:
-                                        prix_vente_caisse = f"{quotation.total_amount:,.2f} DZD"
-                                    
-                                    # Description and dimensions from quotation line items
-                                    if quotation.line_items:
-                                        line_item = quotation.line_items[0]  # Take first item
-                                        
-                                        # Description - comprehensive approach
-                                        if line_item.description and line_item.description.strip():
-                                            description = line_item.description.strip()
-                                        elif quotation.notes and quotation.notes.strip():
-                                            # Fallback to quotation notes
-                                            clean_notes = quotation.notes.replace('[ARCHIVED]', '').strip()
-                                            if clean_notes:
-                                                description = clean_notes
-                                        else:
-                                            # Generate description from dimensions and type
-                                            if line_item.length_mm and line_item.width_mm and line_item.height_mm:
-                                                cardboard_info = line_item.cardboard_type or "Standard"
-                                                description = f"Carton {cardboard_info} {line_item.length_mm}×{line_item.width_mm}×{line_item.height_mm}mm"
-                                        
-                                        # Caisse dimensions
-                                        if line_item.length_mm and line_item.width_mm and line_item.height_mm:
-                                            caisse_dimensions = f"{line_item.length_mm}×{line_item.width_mm}×{line_item.height_mm}mm"
-                                
-                                # Prix d'achat plaque and plaque dimensions (from supplier order)
-                                if hasattr(client_order, 'supplier_order') and client_order.supplier_order:
-                                    supplier_order = client_order.supplier_order
-                                    if supplier_order.total_amount:
-                                        prix_achat_plaque = f"{supplier_order.total_amount:,.2f} DZD"
-                                    
-                                    # Get plaque dimensions from supplier order line items
-                                    if hasattr(supplier_order, 'line_items') and supplier_order.line_items:
-                                        so_line_item = supplier_order.line_items[0]  # Take first item
-                                        if hasattr(so_line_item, 'plaque_width_mm') and hasattr(so_line_item, 'plaque_length_mm'):
-                                            if so_line_item.plaque_width_mm and so_line_item.plaque_length_mm:
-                                                plaque_dimensions = f"{so_line_item.plaque_width_mm}×{so_line_item.plaque_length_mm}mm"
-                                                if hasattr(so_line_item, 'plaque_flap_mm') and so_line_item.plaque_flap_mm:
-                                                    plaque_dimensions += f" (Rabat: {so_line_item.plaque_flap_mm}mm)"
-                                
-                                # Check if invoice was generated (simplified check)
-                                if client_order.status and client_order.status.value == "terminé":
-                                    facture_generee = "Oui"
+                        # Determine caisse dimensions (prefer SupplierOrder line item, fallback to quotation line)
+                        if co and getattr(co, 'supplier_order', None) and co.supplier_order.line_items:
+                            sli = co.supplier_order.line_items[0]
+                            if all([sli.caisse_length_mm, sli.caisse_width_mm, sli.caisse_height_mm]):
+                                caisse_dimensions = f"{sli.caisse_length_mm}×{sli.caisse_width_mm}×{sli.caisse_height_mm}mm"
+                        if caisse_dimensions == "N/A" and co and co.quotation and co.quotation.line_items:
+                            qli = co.quotation.line_items[0]
+                            if all([qli.length_mm, qli.width_mm, qli.height_mm]):
+                                caisse_dimensions = f"{qli.length_mm}×{qli.width_mm}×{qli.height_mm}mm"
+
+                        # Determine description (prefer quotation description, then notes, then generated from dims)
+                        if co and co.quotation and co.quotation.line_items:
+                            qli = co.quotation.line_items[0]
+                            if qli.description and qli.description.strip():
+                                description = qli.description.strip()
+                            elif co.quotation.notes and co.quotation.notes.strip():
+                                description = co.quotation.notes.replace('[ARCHIVED]', '').strip()
+                            elif all([qli.length_mm, qli.width_mm, qli.height_mm]):
+                                cardboard_info = qli.cardboard_type or 'Standard'
+                                description = f"Carton {cardboard_info} {qli.length_mm}×{qli.width_mm}×{qli.height_mm}mm"
+                        # Last resort: use production batch description
+                        if description == "N/A":
+                            _desc_val = getattr(pb, 'description', None)
+                            if isinstance(_desc_val, str) and _desc_val.strip():
+                                description = _desc_val.strip()
                         
-                        data.append([
-                            str(pb.id),
-                            client_name,
-                            description,
-                            caisse_dimensions,
-                            plaque_dimensions,
-                            prix_achat_plaque,
-                            prix_vente_caisse,
-                            date_livraison,
-                            facture_generee,
-                            archive_date
-                        ])
+                        # Fill details cache using [ARCHIVE_DETAIL] from ClientOrder.notes if present
+                        archived_detail = None
+                        try:
+                            if pb.client_order_id:
+                                co = session.query(ClientOrder).filter(ClientOrder.id == pb.client_order_id).first()
+                                if co and co.notes and '[ARCHIVE_DETAIL]' in co.notes:
+                                    import json
+                                    # Take the last [ARCHIVE_DETAIL] line
+                                    lines = [ln.strip() for ln in co.notes.splitlines() if ln.strip().startswith('[ARCHIVE_DETAIL]')]
+                                    if lines:
+                                        payload = lines[-1][len('[ARCHIVE_DETAIL] '):].strip()
+                                        archived_detail = json.loads(payload)
+                        except Exception:
+                            archived_detail = None
+
+                        # Use archived detail as fallback to reduce N/A in the list
+                        if archived_detail and isinstance(archived_detail, dict):
+                            q = archived_detail.get('quotation', {}) or {}
+                            so = archived_detail.get('supplier_order', {}) or {}
+                            if description == "N/A":
+                                description = q.get('description') or archived_detail.get('description') or description
+                            if caisse_dimensions == "N/A":
+                                caisse_dimensions = q.get('caisse_dimensions') or caisse_dimensions
+                            if client_name == "N/A":
+                                client_name = archived_detail.get('client_name') or client_name
+
+                        # Push to left list
+                        data.append([str(pb.id), description, client_name, caisse_dimensions])
+
+                        # Assemble rich details text for right panel: include full data from DB (quotation + supplier order)
+                        details_parts = []
+                        # Header
+                        details_parts.append(
+                            (
+                                f"Archive Details\n\n"
+                                f"Lot: {pb.id}  Code: {getattr(pb, 'batch_code', '')}\n"
+                                f"Quantité: {getattr(pb, 'quantity', 'N/A')}   Date production: {getattr(pb, 'production_date', 'N/A')}\n"
+                                f"Client: {client_name}\n"
+                                f"Description: {description}\n"
+                                f"Dimensions caisse: {caisse_dimensions}\n"
+                            )
+                        )
+                        # Quotation section
+                        if co and co.quotation:
+                            q = co.quotation
+                            details_parts.append(
+                                (
+                                    f"\n— Devis —\n"
+                                    f"Référence: {q.reference}\nDate: {getattr(q, 'issue_date', 'N/A')}  Valide jusqu'au: {getattr(q, 'valid_until', 'N/A')}\n"
+                                    f"Devise: {getattr(q, 'currency', 'DZD')}  Total: {getattr(q, 'total_amount', 'N/A')}\n"
+                                    f"Notes: {getattr(q, 'notes', '') or '—'}\n"
+                                )
+                            )
+                            if q.line_items:
+                                details_parts.append("Lignes de devis:")
+                                for li in q.line_items:
+                                    dims = (
+                                        f"{li.length_mm}×{li.width_mm}×{li.height_mm}mm" if all([li.length_mm, li.width_mm, li.height_mm]) else "N/A"
+                                    )
+                                    color = getattr(li, 'color', None)
+                                    color_val = color.value if color else None
+                                    details_parts.append(
+                                        (
+                                            f"  - #{li.line_number} {li.description or ''}\n"
+                                            f"    Qté: {li.quantity}  PU: {getattr(li, 'unit_price', 'N/A')}  Total: {getattr(li, 'total_price', 'N/A')}\n"
+                                            f"    Dimensions caisse: {dims}  Couleur: {color_val or 'N/A'}  Carton: {li.cardboard_type or 'N/A'}\n"
+                                            f"    Réf matière: {getattr(li, 'material_reference', '') or '—'}  Cliché: {'Oui' if getattr(li, 'is_cliche', False) else 'Non'}\n"
+                                        )
+                                    )
+                        # Supplier order section
+                        if co and getattr(co, 'supplier_order', None):
+                            so = co.supplier_order
+                            supplier_name = getattr(getattr(so, 'supplier', None), 'name', 'N/A')
+                            details_parts.append(
+                                (
+                                    f"\n— Commande Matière Première —\n"
+                                    f"Bon: {getattr(so, 'bon_commande_ref', getattr(so, 'reference', 'N/A'))}  Date: {getattr(so, 'order_date', 'N/A')}  Statut: {getattr(so, 'status', 'N/A')}\n"
+                                    f"Fournisseur: {supplier_name}  Total: {getattr(so, 'total_amount', 'N/A')} {getattr(so, 'currency', 'DZD')}\n"
+                                    f"Notes: {getattr(so, 'notes', '') or '—'}\n"
+                                )
+                            )
+                            if so.line_items:
+                                details_parts.append("Lignes de commande:")
+                                for li in so.line_items:
+                                    caisse = f"{li.caisse_length_mm}×{li.caisse_width_mm}×{li.caisse_height_mm}mm"
+                                    plaque = f"{li.plaque_width_mm}×{li.plaque_length_mm}mm" + (f" (Rabat: {li.plaque_flap_mm}mm)" if getattr(li, 'plaque_flap_mm', None) else "")
+                                    details_parts.append(
+                                        (
+                                            f"  - {li.code_article}  Qté plaques: {li.quantity}  UTTC: {getattr(li, 'prix_uttc_plaque', 'N/A')}  Total: {getattr(li, 'total_line_amount', 'N/A')}\n"
+                                            f"    Caisse: {caisse}  Plaque: {plaque}\n"
+                                            f"    Client: {getattr(getattr(li, 'client', None), 'name', 'N/A')}  Réf matière: {getattr(li, 'material_reference', '') or '—'}  Carton: {getattr(li, 'cardboard_type', '') or '—'}\n"
+                                            f"    Notes: {getattr(li, 'notes', '') or '—'}\n"
+                                        )
+                                    )
+
+                        # Delivery and invoice quick summary
+                        if co:
+                            try:
+                                deliveries = session.query(Delivery).filter(Delivery.client_order_id == co.id).all()
+                                delivered_qty = sum(getattr(d, 'quantity', 0) or 0 for d in deliveries)
+                                invoices = session.query(Invoice).filter(Invoice.client_order_id == co.id).all()
+                                details_parts.append(
+                                    (
+                                        f"\n— Suivi —\n"
+                                        f"Livraisons: {len(deliveries)}  Quantité livrée: {delivered_qty}\n"
+                                        f"Factures: {len(invoices)}\n"
+                                    )
+                                )
+                            except Exception:
+                                pass
+                        elif archived_detail and isinstance(archived_detail, dict):
+                            # Provide minimal summary from archived detail if DB relations are absent
+                            q = archived_detail.get('quotation', {})
+                            so = archived_detail.get('supplier_order', {})
+                            details_parts.append("\n— Données archivées —")
+                            details_parts.append(
+                                (
+                                    f"Devis: {q.get('reference', 'N/A')}  PU: {q.get('unit_price', 'N/A')}  Total: {q.get('total_price', 'N/A')}\n"
+                                    f"Description: {q.get('description', 'N/A')}  Caisse: {q.get('caisse_dimensions', 'N/A')}  Carton: {q.get('cardboard_type', 'N/A')}  Couleur: {q.get('color', 'N/A')}\n"
+                                )
+                            )
+                            details_parts.append(
+                                (
+                                    f"BC Matière: {so.get('reference', 'N/A')}  Plaque: {so.get('plaque_dimensions', 'N/A')}  UTTC: {so.get('prix_uttc_plaque', 'N/A')}  Total: {so.get('total_amount', 'N/A')}\n"
+                                )
+                            )
+
+                        # Include archived detail timestamp if present
+                        if archived_detail and isinstance(archived_detail, dict):
+                            details_parts.append(f"\nArchivé le: {archived_detail.get('archived_at', archive_date)}")
+                        else:
+                            details_parts.append(f"\nArchivé le: {archive_date}")
+
+                        details_text = "\n".join(details_parts)
+
+                        self._details_cache[str(pb.id)] = details_text
                         
                     except Exception as e:
                         print(f"Error processing production batch {pb.id}: {e}")
                         continue
                 
                 # Sort by archive date (newest first)
-                data.sort(key=lambda x: x[9], reverse=True)
-                
-                self.archive_table.load_data(data)
+                # Sort by description ascending for easy scan
+                try:
+                    data.sort(key=lambda x: (x[1] or '').lower())
+                except Exception:
+                    pass
+
+                self.list_table.load_data(data)
                 
             finally:
                 session.close()
@@ -468,6 +607,57 @@ class ArchiveWidget(QWidget):
         
         if reply == QMessageBox.StandardButton.Yes:
             self._restore_item(item_type, item_id)
+
+    def _handle_delete_request(self, item_type: str, item_id: int):
+        """Handle delete request for archived item"""
+        reply = QMessageBox.warning(
+            self,
+            'Delete Archived Item',
+            'This will permanently delete the archived production lot from the database.\n\n'
+            'The linked Devis/Commande ne seront PAS supprimés.\n\n'
+            'Do you want to continue?',
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            session = SessionLocal()
+            try:
+                if item_type not in {"archived_transaction", "production_batch"}:
+                    QMessageBox.information(self, 'Unsupported', 'Only archived production lots can be deleted here.')
+                    return
+                pb = session.query(ProductionBatch).filter(ProductionBatch.id == item_id).first()
+                if not pb:
+                    QMessageBox.warning(self, 'Not found', 'Archived production lot not found.')
+                    return
+                # Only allow delete if it is archived
+                if not (pb.batch_code or '').startswith('[ARCHIVED]'):
+                    QMessageBox.information(self, 'Blocked', 'Only archived lots can be deleted.')
+                    return
+                session.delete(pb)
+                session.commit()
+                QMessageBox.information(self, 'Deleted', 'Archived production lot deleted.')
+                self.refresh_all_data()
+            finally:
+                session.close()
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Failed to delete archived item: {e}')
+
+    def _on_row_selected(self):
+        """Render details when a row is selected"""
+        try:
+            current_row = self.list_table.currentRow()
+            if current_row < 0:
+                return
+            id_item = self.list_table.item(current_row, 0)
+            if not id_item:
+                return
+            pb_id = id_item.text()
+            details = self._details_cache.get(pb_id, "Aucun détail disponible.")
+            self.details_panel.setPlainText(details)
+        except Exception as e:
+            self.details_panel.setPlainText(f"Erreur lors de l'affichage des détails: {e}")
     
     def _restore_item(self, item_type: str, item_id: int):
         """Restore an item from archive"""
