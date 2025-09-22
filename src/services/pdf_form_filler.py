@@ -557,9 +557,7 @@ class PDFFormFiller:
                 if is_initial:
                     table_data = [["Description", "Dimensions", "Couleur", "Cliché", "Quantité Min.", "UTTC"]]
                 else:
-                    table_data = [["Description", "Dimensions", "Couleur", "Cliché", "Qté", "UTTC", "Total"]]
-                
-                total = Decimal('0')
+                    table_data = [["Description", "Dimensions", "Couleur", "Cliché", "Qté", "UTTC"]]
                 
                 for item in data['line_items']:
                     # Extract numeric quantity for calculations
@@ -568,7 +566,6 @@ class PDFFormFiller:
                     numbers = re.findall(r'\d+', quantity_str)
                     numeric_quantity = int(numbers[-1]) if numbers else 0
                     
-                    line_total = Decimal(str(item.get('unit_price', 0))) * Decimal(str(numeric_quantity))
                     cliche_status = "Oui" if item.get('is_cliche') else "Non"
                     
                     # Get dimensions from the item data
@@ -577,35 +574,22 @@ class PDFFormFiller:
                         # Fallback: calculate if not provided
                         dimensions = f"{item['length_mm']} × {item['width_mm']} × {item['height_mm']}"
                     
-                    if is_initial:
-                        # For initial devis, show minimum quantity
-                        table_data.append([
-                            str(item.get('description', '')),
-                            dimensions,
-                            str(item.get('color', '')),
-                            cliche_status,
-                            str(item.get('quantity', '')),  # Display "à partir de X"
-                            f"{item.get('unit_price', 0):.2f}"
-                        ])
-                    else:
-                        table_data.append([
-                            str(item.get('description', '')),
-                            dimensions,
-                            str(item.get('color', '')),
-                            cliche_status,
-                            str(item.get('quantity', '')),  # Display original quantity string
-                            f"{item.get('unit_price', 0):.2f}",
-                            f"{line_total:.2f}"
-                        ])
-                        total += line_total
+                    table_data.append([
+                        str(item.get('description', '')),
+                        dimensions,
+                        str(item.get('color', '')),
+                        cliche_status,
+                        str(item.get('quantity', '')),  # Display original quantity string
+                        f"{item.get('unit_price', 0):.2f}"
+                    ])
 
                 # Create and style the table
                 if is_initial:
                     # Column widths for initial devis: Description, Dimensions, Couleur, Cliché, Quantité Min., UTTC
                     table = Table(table_data, colWidths=[110, 100, 45, 45, 85, 45])
                 else:
-                    # Column widths for regular devis: Description, Dimensions, Couleur, Cliché, Qté, UTTC, Total
-                    table = Table(table_data, colWidths=[90, 90, 35, 35, 55, 35, 45])
+                    # Column widths for regular devis: Description, Dimensions, Couleur, Cliché, Qté, UTTC
+                    table = Table(table_data, colWidths=[120, 110, 50, 50, 75, 50])
                 style = TableStyle([
                     ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#0D47A1")),
                     ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
@@ -631,11 +615,8 @@ class PDFFormFiller:
                 table.wrapOn(c, width, height)
                 table.drawOn(c, x_position, y_position)
 
-                # Total (only show for non-initial devis)
-                if not data.get('is_initial', False):
-                    c.setFont("Helvetica-Bold", 10)
-                    c.drawString(400, height - 450 - 30, f"TOTAL: {total:.2f} DA")
-                else:
+                # Note for initial devis
+                if data.get('is_initial', False):
                     c.setFont("Helvetica-Oblique", 9)
                     c.drawString(400, height - 450 - 30, "Devis Initial - Quantités minimales indiquées")
 
