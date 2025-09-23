@@ -644,7 +644,13 @@ class PDFFormFiller:
         try:
             c = canvas.Canvas(temp_path, pagesize=A4)
             width, height = A4
-            
+
+
+            # Add requested text
+            c.setFont("Helvetica-Bold", 14)
+            c.drawString(110, height - 100, "DJERROUD LYDIA")
+
+
             # Add title "Bon de commande"
             c.setFont("Helvetica-Bold", 20)
             title_text = "Bon de commande"
@@ -729,12 +735,13 @@ class PDFFormFiller:
                     # Build mesure de caisse string (box dimensions)
                     mesure_caisse = ""
                     if item.get('length_mm') and item.get('width_mm') and item.get('height_mm'):
-                        mesure_caisse = f"{item['length_mm']} / {item['width_mm']} / {item['height_mm']}"
+                        mesure_caisse = f"{item['length_mm']}/{item['width_mm']}/{item['height_mm']}"
                     
                     # Build designation de plaque string (plaque dimensions)
                     designation_plaque = ""
                     if item.get('plaque_width_mm') and item.get('plaque_length_mm') and item.get('plaque_flap_mm'):
-                        designation_plaque = f"{item['plaque_width_mm']} / {item['plaque_length_mm']} / {item['plaque_flap_mm']}"
+                        # Display as: largeur * longueur R rabat (e.g., 1200 * 800 R 30)
+                        designation_plaque = f"{item['plaque_width_mm']}/{item['plaque_length_mm']}/R{item['plaque_flap_mm']}"
                     else:
                         # Fallback if plaque dimensions not available
                         designation_plaque = "À définir"
