@@ -22,6 +22,7 @@ class ClientDetailDialog(QDialog):
         self.phone_edit = QLineEdit()
         self.address_edit = QLineEdit()
         self.city_edit = QLineEdit()
+        self.activity_edit = QLineEdit()
         
         # Additional optional business registration fields
         self.numero_rc_edit = QLineEdit()
@@ -40,6 +41,8 @@ class ClientDetailDialog(QDialog):
         self.phone_edit.setText(self.client.phone or '')
         self.address_edit.setText(self.client.address or '')
         self.city_edit.setText(self.client.city or '')
+        # Activity/sector
+        self.activity_edit.setText(getattr(self.client, 'activity', '') or '')
         
         # Populate optional business registration fields
         self.numero_rc_edit.setText(getattr(self.client, 'numero_rc', '') or '')
@@ -49,7 +52,7 @@ class ClientDetailDialog(QDialog):
         
         if self.read_only:
             for field in [self.name_edit, self.contact_edit, self.email_edit, 
-                         self.phone_edit, self.address_edit, self.city_edit,
+                         self.phone_edit, self.address_edit, self.city_edit, self.activity_edit,
                          self.numero_rc_edit, self.nis_edit, self.nif_edit, self.ai_edit]:
                 field.setReadOnly(True)
 
@@ -100,6 +103,7 @@ class ClientDetailDialog(QDialog):
             self.phone_edit.setPlaceholderText("Ex: +213 21 XX XX XX")
             self.address_edit.setPlaceholderText("Ex: 123 Rue des Industries")
             self.city_edit.setPlaceholderText("Ex: Alger")
+            self.activity_edit.setPlaceholderText("Ex: Agroalimentaire (optionnel)")
             
             # Additional optional fields placeholders
             self.numero_rc_edit.setPlaceholderText("Ex: 16/00-123456B15 (optionnel)")
@@ -113,6 +117,7 @@ class ClientDetailDialog(QDialog):
         form_layout.addRow('Téléphone:', self.phone_edit)
         form_layout.addRow('Adresse:', self.address_edit)
         form_layout.addRow('Ville:', self.city_edit)
+        form_layout.addRow('Activité:', self.activity_edit)
         
         # Add separator for business registration section
         separator_label = QLabel()
@@ -160,6 +165,7 @@ class ClientDetailDialog(QDialog):
             'phone': self.phone_edit.text().strip(),
             'address': self.address_edit.text().strip(),
             'city': self.city_edit.text().strip(),
+            'activity': self.activity_edit.text().strip() or None,
             # Additional optional business registration fields
             'numero_rc': self.numero_rc_edit.text().strip() or None,
             'nis': self.nis_edit.text().strip() or None,

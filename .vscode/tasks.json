@@ -36,6 +36,18 @@
 			"command": "python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt",
 			"problemMatcher": [],
 			"group": "build"
+		},
+		{
+			"label": "Run unified smoke test",
+			"type": "shell",
+			"command": "source venv/bin/activate && python scripts/smoke_unified.py",
+			"group": "build"
+		},
+		{
+			"label": "Run unified smoke test",
+			"type": "shell",
+			"command": "source venv/bin/activate && python scripts/smoke_unified.py",
+			"group": "build"
 		}
 	]
 }

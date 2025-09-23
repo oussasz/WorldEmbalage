@@ -207,6 +207,7 @@ class PDFFormFiller:
                 "client_name": data.get('client_name', ''),
                 "current_stock_quantity": data.get('current_stock_quantity', ''),
                 "label_number": data.get('label_number', ''),
+                "designation": data.get('designation') or data.get('description') or data.get('caisse_dimensions', ''),
                 "plaque_dimensions": data.get('plaque_dimensions', ''),
                 "caisse_dimensions": data.get('caisse_dimensions', ''),
                 "cliche_status": data.get('cliche_status', ''),
@@ -219,9 +220,10 @@ class PDFFormFiller:
             # These coordinates are positioned for a typical form layout
             coordinates = [
                 {"field": "last_arrival_date", "x": 263, "y": 366, "font_size": 10},
-                {"field": "client_name", "x": 143, "y": 414, "font_size": 15},
+                {"field": "client_name", "x": 143.33, "y": 418.67, "font_size": 15},
                 {"field": "current_stock_quantity", "x": 162, "y": 520, "font_size": 12},
                 {"field": "label_number", "x": 447, "y": 514, "font_size": 12},
+                {"field": "designation", "x": 150, "y": 540, "font_size": 10},
                 {"field": "plaque_dimensions", "x": 238, "y": 571, "font_size": 12},
                 {"field": "caisse_dimensions", "x": 233, "y": 622, "font_size": 12},
                 {"field": "cliche_status", "x": 147, "y": 694, "font_size": 12},
@@ -296,6 +298,7 @@ class PDFFormFiller:
             'client_name': ['client', 'client_name', 'customer'],
             'current_stock_quantity': ['quantite', 'quantity', 'stock_quantity'],
             'label_number': ['etiquette', 'label_number', 'numero_etiquette'],
+            'designation': ['designation', 'description', 'designation_produit'],
             'plaque_dimensions': ['dimension_plaque', 'plaque_dim', 'plaque_dimensions'],
             'caisse_dimensions': ['dimension_caisse', 'caisse_dim', 'caisse_dimensions'],
             'cliche_status': ['cliche', 'cliche_status', 'is_cliche'],
@@ -611,7 +614,8 @@ class PDFFormFiller:
                 # Center the table horizontally on the page
                 table_width, table_height = table.wrap(0, 0)
                 x_position = (width - table_width) / 2  # Center X
-                y_position = height - 370  # Keep Y as before (adjust if needed)
+                desired_y_top = 540
+                y_position = desired_y_top - table_height  
                 table.wrapOn(c, width, height)
                 table.drawOn(c, x_position, y_position)
 
@@ -696,10 +700,10 @@ class PDFFormFiller:
                 {"field": "order_reference", "x": 450, "y": 165},
                 {"field": "order_date", "x": 450, "y": 175},
 
+
                 {"field": "supplier_name", "x": 75, "y": 180},
-                {"field": "supplier_contact", "x": 75, "y": 195},
-                {"field": "supplier_email", "x": 75, "y": 210},
-                {"field": "supplier_phone", "x": 75, "y": 225}
+                {"field": "supplier_email", "x": 75, "y": 195},
+                {"field": "supplier_phone", "x": 75, "y": 210}
             ]
 
             for item in coordinates:
@@ -778,14 +782,16 @@ class PDFFormFiller:
                 # Position the table
                 table_width, table_height = table.wrap(0, 0)
                 x_position = (width - table_width) / 2
-                y_position = height - 400  # Fixed position for table
+                desired_y_top = 550 
+                y_position = desired_y_top - table_height  
+
                 table.wrapOn(c, width, height)
                 table.drawOn(c, x_position, y_position)
 
             # Add signature section in the right corner
             c.setFont("Helvetica-Bold", 10)  # Set to bold for "Signateur"
             signature_x = width - 200  # Right side positioning
-            signature_y = 150  # Bottom area
+            signature_y = 200  # Bottom area
             
             # Get current date
             from datetime import date
@@ -795,10 +801,10 @@ class PDFFormFiller:
             
             # Switch back to normal font for the date line
             c.setFont("Helvetica", 8)
-            c.drawString(signature_x, signature_y - 20, f"Fait le {current_date} à ")
+            c.drawString(signature_x, signature_y - 20, f"Fait le {current_date} à BEJAIA")
             
             # Add a line for signature
-            c.line(signature_x, signature_y - 60, signature_x + 150, signature_y - 60)
+            c.line(signature_x, signature_y - 100, signature_x + 150, signature_y - 100)
 
             c.showPage()
             c.save()
@@ -976,28 +982,29 @@ class PDFFormFiller:
         width, height = A4
         
         # Set font
-        c.setFont("Helvetica", 12)
+        c.setFont("Helvetica-Bold", 15)
         
         # Add text at approximate positions (adjust as needed based on template)
         # Reference (top of document)
         reference = data.get('reference', '')
-        c.drawString(400, height - 100, f"Réf: {reference}")
+        c.drawString(447.67, 272.58, str(reference))
         
         # Date de production
         production_date = data.get('production_date', '')
-        c.drawString(150, height - 150, str(production_date))
+        c.drawString(314.93, 433.70, str(production_date))
         
         # Client
         client = data.get('client', '')
-        c.drawString(150, height - 200, str(client))
+        c.drawString(142.82, 376.03, str(client))
         
+    
         # Quantité
         quantity = data.get('quantity', '')
-        c.drawString(150, height - 250, f"{quantity} caisses")
+        c.drawString(160.21, 271.66, f"{quantity} caisses")
         
-        # Dimensions / Désignation (prefer designation from devis; fallback to dimensions)
-        dimensions = data.get('designation') or data.get('dimensions', '')
-        c.drawString(150, height - 300, str(dimensions))
+        # Dimensions (keep original dimensions field for form compatibility)
+        dimensions = data.get('dimensions', '')
+        c.drawString(256.34, 219.48, str(dimensions))
         
         c.save()
         return overlay_path
@@ -1130,43 +1137,52 @@ class PDFFormFiller:
         # Add text at approximate positions (adjust as needed based on template)
         # Dernière date d'arrivée
         arrival_date = data.get('arrival_date', '')
-        c.drawString(150, height - 120, str(arrival_date))
+        c.setFont("Helvetica", 15) 
+        c.drawString(264.58, 474.90, str(arrival_date))
         
         # Client
         client = data.get('client', '')
-        c.drawString(150, height - 150, str(client))
+        c.setFont("Helvetica-Bold", 15) 
+        c.drawString(143.33, 423.67, str(client))
+
         
         # Quantité
         quantity = data.get('quantity', '')
-        c.drawString(150, height - 180, f"{quantity} plaques")
+        c.setFont("Helvetica-Bold", 15)
+        c.drawString(160.21, 325.67, f"{quantity} plaques")
         
         # N° étiquette
         label_number = data.get('label_number', '')
-        c.drawString(400, height - 120, str(label_number))
-        
+        c.drawString( 444.93, 325.67, str(label_number))
+
+    
         # Dimension plaque
         plaque_dimensions = data.get('plaque_dimensions', '')
-        c.drawString(150, height - 210, str(plaque_dimensions))
+        c.setFont("Helvetica-Bold", 15)
+        c.drawString(240.77, 271.66, str(plaque_dimensions))
         
         # Dimension caisse
         caisse_dimensions = data.get('caisse_dimensions', '')
-        c.drawString(150, height - 240, str(caisse_dimensions))
+        c.setFont("Helvetica-Bold", 15)
+        c.drawString(240.77, 217.65, str(caisse_dimensions))
         
         # Cliché
         cliche = data.get('cliche', 'Non')
-        c.drawString(150, height - 270, str(cliche))
+        c.setFont("Helvetica-Bold", 15)
+        c.drawString(148.31, 146.24, str(cliche))
         
         # Remarque
         remark = data.get('remark', '')
-        c.drawString(150, height - 300, str(remark))
+        c.setFont("Helvetica-Bold", 15)
+        c.drawString(356.13, 146.24, str(remark))
         
         # Numéro de Bon de commande
         bon_commande = data.get('bon_commande', '')
-        c.drawString(150, height - 330, str(bon_commande))
+        c.drawString(234.37, 94.06, str(bon_commande))
         
         # Resté
         remaining = data.get('remaining_quantity', '')
-        c.drawString(150, height - 360, f"Resté: {remaining}")
+        c.drawString(355.21, 94.06, str(remaining))
         
         c.save()
         return overlay_path
@@ -1310,49 +1326,48 @@ class PDFFormFiller:
         c.setFillColor(night_blue)
         title_text = "FACTURE"
         title_width = c.stringWidth(title_text, "Helvetica-Bold", 24)
-        c.drawString((width - title_width) / 2, height - 80, title_text)
+        c.drawString((width - title_width) / 2, 700, title_text)
         
         # Invoice number and date - aligned left under title
         c.setFont("Helvetica", 12)
         c.setFillColor(colors.black)
         invoice_number = data.get('invoice_number', '')
-        c.drawString(50, height - 120, f"N°: {invoice_number}")
+        c.drawString(61.34, 715.67, f"N°: {invoice_number}")
         
         # Client information (aligned right)
         c.setFont("Helvetica-Bold", 14)
         client_name = data.get('client_name', '')
-        client_x = width - 200
-        c.drawString(client_x, height - 120, str(client_name))
+        c.drawString(396.41, 659.83 , str(client_name))
         
         c.setFont("Helvetica", 11)
         client_activity = data.get('client_activity', '')
         if client_activity:
-            c.drawString(client_x, height - 140, str(client_activity))
+            c.drawString(396.41, 669.83, str(client_activity))
         
         client_address = data.get('client_address', '')
         if client_address:
-            c.drawString(client_x, height - 160, str(client_address))
+            c.drawString(396.41, 649.83, str(client_address))
         
         # RC, NIF, NIS, AI fields
         client_rc = data.get('client_rc', '')
         if client_rc:
-            c.drawString(client_x, height - 180, f"RC: {client_rc}")
+            c.drawString(396.41, height - 180, f"RC: {client_rc}")
         
         client_nif = data.get('client_nif', '')
         if client_nif:
-            c.drawString(client_x, height - 200, f"NIF: {client_nif}")
+            c.drawString(396.41, height - 200, f"NIF: {client_nif}")
         
         client_nis = data.get('client_nis', '')
         if client_nis:
-            c.drawString(client_x, height - 220, f"NIS: {client_nis}")
+            c.drawString(396.41, height - 220, f"NIS: {client_nis}")
         
         client_ai = data.get('client_ai', '')
         if client_ai:
-            c.drawString(client_x, height - 240, f"AI: {client_ai}")
+            c.drawString(396.41, height - 240, f"AI: {client_ai}")
         
         client_phone = data.get('client_phone', '')
         if client_phone:
-            c.drawString(client_x, height - 260, f"Tél: {client_phone}")
+            c.drawString(396.41, height - 260, f"Tél: {client_phone}")
         
         # Payment mode
         c.setFont("Helvetica", 10)

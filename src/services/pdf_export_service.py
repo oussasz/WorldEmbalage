@@ -312,9 +312,13 @@ def export_raw_material_label(reception_ids: list[int], remark: str = "") -> Pat
             
             total_ordered += item.quantity
             
-            # Get dimensions from the first line item
-            if not plaque_dimensions and item.plaque_length_mm and item.plaque_width_mm:
-                plaque_dimensions = f"{item.plaque_length_mm} x {item.plaque_width_mm} mm"
+            # Get plaque dimensions from the first line item, formatted as: largeur x longueur R<rabat>
+            # Example: 440 x 350 R400 (no 'mm' suffix as requested)
+            if not plaque_dimensions and item.plaque_width_mm and item.plaque_length_mm:
+                base = f"{item.plaque_width_mm} x {item.plaque_length_mm}"
+                if getattr(item, 'plaque_flap_mm', None):
+                    base += f" R{item.plaque_flap_mm}"
+                plaque_dimensions = base
             
             if not caisse_dimensions and item.caisse_length_mm and item.caisse_width_mm and item.caisse_height_mm:
                 caisse_dimensions = f"{item.caisse_length_mm} x {item.caisse_width_mm} x {item.caisse_height_mm} mm"
@@ -397,9 +401,11 @@ def _prepare_raw_material_label_data_simple(reception_ids: list[int], total_quan
         finally:
             session.close()
     
+    # If no quotation description, leave designation empty or use a generic label,
+    # but DO NOT override caisse_dimensions (should remain pure mm values)
     if not quotation_description:
-        quotation_description = caisse_dimensions or "Cartons"
-        print(f"DEBUG Raw Material Label: Using fallback description: '{quotation_description}'")
+        quotation_description = "Cartons"
+        print(f"DEBUG Raw Material Label: No quotation description; using fallback designation: '{quotation_description}'")
     
     # Generate unique label number using unified system
     from utils.reference_generator import generate_raw_material_label_reference
@@ -417,7 +423,11 @@ def _prepare_raw_material_label_data_simple(reception_ids: list[int], total_quan
         'quantity': total_quantity,
         'label_number': label_number,
         'plaque_dimensions': plaque_dimensions or "Non spécifiées",
-        'caisse_dimensions': quotation_description,  # Use quotation description instead of raw dimensions
+        # Keep caisse dimensions as mm values only (length x width x height mm)
+        'caisse_dimensions': caisse_dimensions,
+        # Put human-readable description from quotation into designation/description
+        'designation': quotation_description,
+        'description': quotation_description,
         'cliche': "Oui" if is_cliche else "Non",
         'remark': remark,
         'bon_commande': bon_commande,

@@ -41,6 +41,8 @@ class OrderService:
                 height_mm=item.get('height_mm'),
                 color=item.get('color'),
                 cardboard_type=item.get('cardboard_type'),
+                # Persist reference de matière première captured in the dialog
+                material_reference=item.get('material_reference'),
                 is_cliche=bool(item.get('is_cliche') or False),
                 notes=(str(item.get('notes')).strip() if item.get('notes') else None),
             )
@@ -83,6 +85,8 @@ class OrderService:
                 height_mm=qli.height_mm,
                 color=qli.color,
                 cardboard_type=qli.cardboard_type,
+                # Carry over the quotation material reference to the order line
+                material_reference=getattr(qli, 'material_reference', None),
                 is_cliche=qli.is_cliche,
                 notes=qli.notes,
             )

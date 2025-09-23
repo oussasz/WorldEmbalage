@@ -18,6 +18,8 @@ class Client(PKMixin, TimestampMixin, Base):
     address: Mapped[str | None] = mapped_column(String(255))
     city: Mapped[str | None] = mapped_column(String(100))
     country: Mapped[str | None] = mapped_column(String(100))
+    # Client activity/sector (e.g., Agroalimentaire, Cosmétique). Optional.
+    activity: Mapped[str | None] = mapped_column(String(128))
     
     # Additional optional business registration fields
     numero_rc: Mapped[str | None] = mapped_column(String(50))  # N° RC (Registre de Commerce)

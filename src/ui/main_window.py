@@ -701,7 +701,7 @@ class MainWindow(QMainWindow):
         # 1. Client et Fournisseur (Split view)
         self.clients_suppliers_split = SplitView(
             "Fournisseurs", ["ID", "Nom", "Téléphone", "Email", "Adresse"],
-            "Clients", ["ID", "Nom", "Téléphone", "Email", "Adresse"]
+            "Clients", ["ID", "Nom", "Téléphone", "Email", "Adresse", "Activité"]
         )
         self.clients_suppliers_split.add_left_action_button("➕ Nouveau Fournisseur", self._new_supplier)
         self.clients_suppliers_split.add_right_action_button("➕ Nouveau Client", self._new_client)
@@ -1778,7 +1778,9 @@ class MainWindow(QMainWindow):
                         height_mm=item_data.get('height_mm'),
                         color=item_data.get('color'),
                         cardboard_type=item_data.get('cardboard_type'),
-                        is_cliche=item_data.get('is_cliche', False)
+                        material_reference=item_data.get('material_reference'),
+                        is_cliche=item_data.get('is_cliche', False),
+                        notes=item_data.get('notes')
                     )
                     session.add(line_item)
                     total_amount += total_price
@@ -1965,7 +1967,9 @@ class MainWindow(QMainWindow):
                         height_mm=item_data.get('height_mm'),
                         color=item_data.get('color'),
                         cardboard_type=item_data.get('cardboard_type'),
-                        is_cliche=item_data.get('is_cliche', False)
+                        material_reference=item_data.get('material_reference'),
+                        is_cliche=item_data.get('is_cliche', False),
+                        notes=item_data.get('notes')
                     )
                     session.add(line_item)
                     total_amount += total_price
@@ -2447,6 +2451,7 @@ class MainWindow(QMainWindow):
                     c.phone or "",
                     c.email or "",
                     c.address or "",
+                    getattr(c, 'activity', '') or "",
                 ]
                 for c in clients
             ]
