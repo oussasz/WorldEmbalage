@@ -93,8 +93,8 @@ Une application de bureau complète pour gérer les opérations d'un atelier de 
 
 ### Démarrage Rapide
 
-1. **Configuration Environnement**: Exécuter la tâche "Setup Environment" dans VS Code
-2. **Lancer l'Application**: Utiliser Ctrl+Shift+P → "Tasks: Run Task" → "Setup and Run World Embalage Application"
+1. Exécuter la tâche VS Code "Setup Environment" (crée un venv et installe les dépendances)
+2. Lancer la tâche "Setup and Run World Embalage Application" (ou exécuter `python src/main.py`)
 
 ### Installation Manuelle
 
@@ -102,6 +102,16 @@ Une application de bureau complète pour gérer les opérations d'un atelier de 
 cd "/home/oussasz/World Embalage"
 python3 -m venv venv
 source venv/bin/activate
+pip install -r requirements.txt
+python src/main.py
+```
+
+### Windows (PowerShell)
+
+```powershell
+cd "C:\path\to\World Embalage"
+py -3 -m venv venv
+./venv/Scripts/Activate.ps1
 pip install -r requirements.txt
 python src/main.py
 ```
@@ -200,6 +210,24 @@ src/
 - Configuration des tâches
 - Tableau de bord moderne avec statistiques en temps réel
 - Interface utilisateur traduite en français
+
+## Création d'un exécutable Windows (optionnel)
+
+Méthode rapide avec PyInstaller (GUI, sans console):
+
+```powershell
+# Dans PowerShell, après activation du venv
+pip install pyinstaller
+pyinstaller packaging/WorldEmbalage.spec
+```
+
+Le binaire se trouve dans `dist/WorldEmbalage/WorldEmbalage.exe`.
+
+Notes:
+
+- Les templates PDF sont inclus via la spec (`template/`), ainsi que `LOGO.jpg`.
+- Les dossiers `logs/` et `generated_reports/` sont créés au runtime si absents.
+- Si vous déplacez des ressources, mettez à jour la spec ou conservez les chemins existants.
 
 ### 🚧 En Cours / Étapes Suivantes
 
