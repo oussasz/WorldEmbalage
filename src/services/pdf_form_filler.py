@@ -1322,57 +1322,58 @@ class PDFFormFiller:
         night_blue = colors.HexColor("#1B4A7F")
         
         # Title "FACTURE" - bold, night blue, centered
-        c.setFont("Helvetica-Bold", 24)
+        c.setFont("Helvetica-Bold", 28)
         c.setFillColor(night_blue)
         title_text = "FACTURE"
-        title_width = c.stringWidth(title_text, "Helvetica-Bold", 24)
-        c.drawString((width - title_width) / 2, 700, title_text)
+     
+        c.drawString(70, 690, title_text)
         
         # Invoice number and date - aligned left under title
-        c.setFont("Helvetica", 12)
+        c.setFont("Helvetica", 10)
         c.setFillColor(colors.black)
         invoice_number = data.get('invoice_number', '')
-        c.drawString(61.34, 715.67, f"N°: {invoice_number}")
-        
+
+        c.drawString(70, 675, f"N°: {invoice_number}")
+
         # Client information (aligned right)
-        c.setFont("Helvetica-Bold", 14)
+        c.setFont("Helvetica", 10)
         client_name = data.get('client_name', '')
-        c.drawString(396.41, 659.83 , str(client_name))
-        
-        c.setFont("Helvetica", 11)
+        c.drawString(350, 703 , f"Nom ou Raison Sociale : {client_name}")
+
+        c.setFont("Helvetica", 10)
         client_activity = data.get('client_activity', '')
         if client_activity:
-            c.drawString(396.41, 669.83, str(client_activity))
+            c.drawString(350, 690, f"Activité : {str(client_activity)}")
         
         client_address = data.get('client_address', '')
         if client_address:
-            c.drawString(396.41, 649.83, str(client_address))
+            c.drawString(350, 677, f"Adresse : {str(client_address)}")
         
         # RC, NIF, NIS, AI fields
         client_rc = data.get('client_rc', '')
         if client_rc:
-            c.drawString(396.41, height - 180, f"RC: {client_rc}")
+            c.drawString(350, 664, f"N°RC: {client_rc}")
         
         client_nif = data.get('client_nif', '')
         if client_nif:
-            c.drawString(396.41, height - 200, f"NIF: {client_nif}")
+            c.drawString(350, 651, f"NIF: {client_nif}")
         
         client_nis = data.get('client_nis', '')
         if client_nis:
-            c.drawString(396.41, height - 220, f"NIS: {client_nis}")
-        
+            c.drawString(350, 638, f"NIS: {client_nis}")
+
         client_ai = data.get('client_ai', '')
         if client_ai:
-            c.drawString(396.41, height - 240, f"AI: {client_ai}")
-        
+            c.drawString(350, 625, f"A.I: {client_ai}")
+
         client_phone = data.get('client_phone', '')
         if client_phone:
-            c.drawString(396.41, height - 260, f"Tél: {client_phone}")
-        
+            c.drawString(350, 612, f"Tél: {client_phone}")
+
         # Payment mode
         c.setFont("Helvetica", 10)
         payment_mode = data.get('payment_mode', 'Mode de Paiement: …')
-        c.drawString(50, height - 280, str(payment_mode))
+        c.drawString(70, 634, f"Mode de Paiement: {payment_mode}")
         
         # Table section - Invoice items table
         if 'line_items' in data and data['line_items']:

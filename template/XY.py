@@ -5,7 +5,7 @@ from PIL import ImageTk
 from pathlib import Path
 
 # افتح PDF وحول الصفحة الأولى إلى صورة مع احترام الحجم وإضافة تكبير/تصغير
-pdf_path = Path(__file__).parent / "facture_FACT-20250923-121159_20250923.pdf"
+pdf_path = Path(__file__).parent / "facture_FACT-20250923-144449_20250923.pdf"
 doc = fitz.open(str(pdf_path))
 page = doc[0]
 page_rect = page.rect  # الأبعاد الأصلية للـ PDF (بوحدة النقاط)
