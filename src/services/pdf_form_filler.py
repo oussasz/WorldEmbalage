@@ -1306,7 +1306,8 @@ class PDFFormFiller:
             'tva': str(data.get('tva', '')),
             'total_ttc': str(data.get('total_ttc', '')),
             'timbre': str(data.get('timbre', '0')),
-            'total_ttc_net': str(data.get('total_ttc_net', '')),
+            # Ensure Total TTC NET equals Total TTC in form fields as well
+            'total_ttc_net': str(data.get('total_ttc', data.get('total_ttc_net', ''))),
             'montant_lettres': str(data.get('amount_in_words', '')),
             'date_signature': str(data.get('signature_date', ''))
         }
@@ -1327,14 +1328,14 @@ class PDFFormFiller:
         c.setFillColor(night_blue)
         title_text = "FACTURE"
      
-        c.drawString(70, 690, title_text)
+        c.drawString(70, 670, title_text)
         
         # Invoice number and date - aligned left under title
         c.setFont("Helvetica", 10)
         c.setFillColor(colors.black)
         invoice_number = data.get('invoice_number', '')
 
-        c.drawString(70, 675, f"N°: {invoice_number}")
+        c.drawString(70, 655, f"N°: {invoice_number}")
 
         # Client information (aligned right) using Paragraph with automatic wrapping and vertical flow
         c.setFont("Helvetica", 10)
@@ -1504,11 +1505,8 @@ class PDFFormFiller:
                 total_ttc = data.get('total_ttc', total_ht_net + tva_amount)
                 c.drawString(summary_x, curr_y, f"Total TTC: {total_ttc:.2f} DA")
                 curr_y -= line_spacing
-                timbre = data.get('timbre', 0)
-                try:
-                    timbre_val = Decimal(str(timbre))
-                except Exception:
-                    timbre_val = Decimal('0')
+                # Always display TIMBRE 1% as 0.00, do not include in calculations
+                timbre_val = Decimal('0')
                 c.drawString(summary_x, curr_y, f"TIMBRE 1%: {timbre_val:.2f} DA")
                 curr_y -= line_spacing
             else:
@@ -1516,11 +1514,16 @@ class PDFFormFiller:
                 total_ttc = data.get('total_ttc', total_ht_net)
                 c.drawString(summary_x, curr_y, f"Total TTC: {total_ttc:.2f} DA")
                 curr_y -= line_spacing
+                # Even without TVA, display TIMBRE 1% as 0.00 and keep it out of totals
+                timbre_val = Decimal('0')
+                c.drawString(summary_x, curr_y, f"TIMBRE 1%: {timbre_val:.2f} DA")
+                curr_y -= line_spacing
 
             # Total TTC NET - bold, night blue highlight, spaced by 12pt from previous line
             c.setFont("Helvetica-Bold", 12)
             c.setFillColor(night_blue)
-            total_ttc_net = data.get('total_ttc_net', total_ttc)
+            # Per requirement: Total TTC NET must equal Total TTC (ignore any timbre or provided net)
+            total_ttc_net = total_ttc
             c.drawString(summary_x, curr_y, f"Total TTC NET: {total_ttc_net:.2f} DA")
             # Capture anchor for footer placement (first footer line will be 50pt below this)
             footer_anchor_y = curr_y
