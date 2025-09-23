@@ -1590,11 +1590,25 @@ class MainWindow(QMainWindow):
                 # Show edit dialog
                 detail_dialog = ClientDetailDialog(client, self, read_only=False)
                 if detail_dialog.exec():
-                    # Update client with new data
+                    # Update client with new data (map only known fields)
                     data = detail_dialog.get_data()
-                    for key, value in data.items():
-                        setattr(client, key, value)
+                    # Normalize values: convert empty strings to None for optional fields
+                    def _norm(v: str | None) -> str | None:
+                        if v is None:
+                            return None
+                        v2 = v.strip()
+                        return v2 if v2 else None
                     
+                    allowed_fields = {
+                        'name', 'contact_name', 'email', 'phone', 'address', 'city',
+                        'activity', 'numero_rc', 'nis', 'nif', 'ai'
+                    }
+                    for key, value in data.items():
+                        if key in allowed_fields:
+                            setattr(client, key, _norm(value))
+                    
+                    # Persist
+                    session.flush()
                     session.commit()
                     QMessageBox.information(self, 'Succès', f'Client {data["name"]} modifié')
                     self.dashboard.add_activity("C", f"Client modifié: {data['name']}", "#FFA500")
@@ -5451,25 +5465,40 @@ Détails individuels:"""
             from services.invoice_service import InvoiceService
             from services.pdf_form_filler import PDFFormFiller, PDFFillError
             
-            # Ask whether to include TVA
-            from PyQt6.QtWidgets import QMessageBox as _QMessageBox
-            tva_dialog = _QMessageBox(self)
-            tva_dialog.setWindowTitle('TVA')
-            tva_dialog.setText('Inclure la TVA (19%) dans la facture ?')
-            tva_dialog.setIcon(_QMessageBox.Icon.Question)
-            btn_with_tva = tva_dialog.addButton('Avec TVA', _QMessageBox.ButtonRole.YesRole)
-            btn_without_tva = tva_dialog.addButton('Sans TVA', _QMessageBox.ButtonRole.NoRole)
-            tva_dialog.addButton(_QMessageBox.StandardButton.Cancel)
-            tva_dialog.exec()
-
-            clicked = tva_dialog.clickedButton()
-            if clicked == tva_dialog.button(_QMessageBox.StandardButton.Cancel):
-                return
-            include_tva = (clicked == btn_with_tva)
+            # Ask options: TVA and payment mode
+            try:
+                from ui.dialogs.invoice_options_dialog import InvoiceOptionsDialog
+            except Exception:
+                InvoiceOptionsDialog = None  # type: ignore
+            include_tva = True
+            selected_payment_mode = "Espèces"
+            if InvoiceOptionsDialog is not None:
+                opt_dlg = InvoiceOptionsDialog(self)
+                if opt_dlg.exec():
+                    include_tva, selected_payment_mode = opt_dlg.get_values()
+                else:
+                    return
+            else:
+                # Fallback simple message box when dialog import fails
+                from PyQt6.QtWidgets import QMessageBox as _QMessageBox
+                tva_dialog = _QMessageBox(self)
+                tva_dialog.setWindowTitle('TVA')
+                tva_dialog.setText('Inclure la TVA (19%) dans la facture ?')
+                tva_dialog.setIcon(_QMessageBox.Icon.Question)
+                btn_with_tva = tva_dialog.addButton('Avec TVA', _QMessageBox.ButtonRole.YesRole)
+                btn_without_tva = tva_dialog.addButton('Sans TVA', _QMessageBox.ButtonRole.NoRole)
+                tva_dialog.addButton(_QMessageBox.StandardButton.Cancel)
+                tva_dialog.exec()
+                clicked = tva_dialog.clickedButton()
+                if clicked == tva_dialog.button(_QMessageBox.StandardButton.Cancel):
+                    return
+                include_tva = (clicked == btn_with_tva)
 
             # Prepare invoice data with TVA choice
             with InvoiceService() as invoice_service:
                 invoice_data = invoice_service.prepare_invoice_data(production_ids, include_tva=include_tva)
+                # Inject selected payment mode into invoice data for PDF
+                invoice_data["payment_mode"] = selected_payment_mode
             
             # Generate PDF invoice
             pdf_filler = PDFFormFiller()

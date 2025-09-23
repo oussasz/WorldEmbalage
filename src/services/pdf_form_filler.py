@@ -14,7 +14,8 @@ import tempfile
 import shutil
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
-from reportlab.platypus import Table, TableStyle
+from reportlab.platypus import Table, TableStyle, Paragraph
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib import colors
 from config.settings import settings
 
@@ -1335,47 +1336,81 @@ class PDFFormFiller:
 
         c.drawString(70, 675, f"N°: {invoice_number}")
 
-        # Client information (aligned right)
+        # Client information (aligned right) using Paragraph with automatic wrapping and vertical flow
         c.setFont("Helvetica", 10)
-        client_name = data.get('client_name', '')
-        c.drawString(350, 703 , f"Nom ou Raison Sociale : {client_name}")
 
-        c.setFont("Helvetica", 10)
+        # Helper to draw a paragraph and return vertical advance (height + spacing)
+        def draw_paragraph_advance(
+            text: str,
+            x: float,
+            y: float,
+            *,
+            max_width: float = 240.0,
+            font_name: str = "Helvetica",
+            font_size: int = 10,
+            leading: int | None = None,
+            spacing: float = 0.0,
+        ) -> float:
+            if not text:
+                return 0.0
+            style = ParagraphStyle(
+                name='ClientInfo',
+                fontName=font_name,
+                fontSize=font_size,
+                leading=(leading if leading is not None else font_size + 2),
+            )
+            p = Paragraph(text, style)
+            _w, h = p.wrap(max_width, 1000)  # large available height
+            p.drawOn(c, x, y - h)
+            return h + spacing
+
+        # Start at the top-most Y used previously and flow down
+        current_y = 703
+        current_y -= draw_paragraph_advance(
+            f"<b>Nom ou Raison Sociale :</b> {data.get('client_name', '')}", 350, current_y
+        )
+
         client_activity = data.get('client_activity', '')
         if client_activity:
-            c.drawString(350, 690, f"Activité : {str(client_activity)}")
+            current_y -= draw_paragraph_advance(f"<b>Activité :</b> {str(client_activity)}", 350, current_y)
         
         client_address = data.get('client_address', '')
         if client_address:
-            c.drawString(350, 677, f"Adresse : {str(client_address)}")
+            current_y -= draw_paragraph_advance(f"<b>Adresse :</b> {str(client_address)}", 350, current_y)
         
         # RC, NIF, NIS, AI fields
         client_rc = data.get('client_rc', '')
         if client_rc:
-            c.drawString(350, 664, f"N°RC: {client_rc}")
+            current_y -= draw_paragraph_advance(f"<b>N°RC:</b> {client_rc}", 350, current_y)
         
         client_nif = data.get('client_nif', '')
         if client_nif:
-            c.drawString(350, 651, f"NIF: {client_nif}")
+            current_y -= draw_paragraph_advance(f"<b>NIF:</b> {client_nif}", 350, current_y)
         
         client_nis = data.get('client_nis', '')
         if client_nis:
-            c.drawString(350, 638, f"NIS: {client_nis}")
+            current_y -= draw_paragraph_advance(f"<b>NIS:</b> {client_nis}", 350, current_y)
 
         client_ai = data.get('client_ai', '')
         if client_ai:
-            c.drawString(350, 625, f"A.I: {client_ai}")
+            current_y -= draw_paragraph_advance(f"<b>A.I:</b> {client_ai}", 350, current_y)
 
         client_phone = data.get('client_phone', '')
         if client_phone:
-            c.drawString(350, 612, f"Tél: {client_phone}")
+            current_y -= draw_paragraph_advance(f"<b>Tél:</b> {client_phone}", 350, current_y)
 
-        # Payment mode
+        # Payment mode (wrapped and placed after client info block without overlap)
         c.setFont("Helvetica", 10)
         payment_mode = data.get('payment_mode', 'Mode de Paiement: …')
-        c.drawString(70, 634, f"Mode de Paiement: {payment_mode}")
-        
+        y_payment_top = min(current_y, 634)
+        pay_style = ParagraphStyle(name='Payment', fontName='Helvetica', fontSize=10, leading=12)
+        pay_para = Paragraph(f"Mode de Paiement: {payment_mode}", pay_style)
+        _w, _h = pay_para.wrap(300, 1000)
+        pay_para.drawOn(c, 70, y_payment_top - _h)
+        current_y = y_payment_top - _h
+
         # Table section - Invoice items table
+        footer_anchor_y = None  # will capture the Y of the 'Total TTC NET' line for footer spacing
         if 'line_items' in data and data['line_items']:
             include_tva = bool(data.get('include_tva', True))
             if include_tva:
@@ -1432,54 +1467,63 @@ class PDFFormFiller:
             
             table.setStyle(style)
             
-            # Position the table
+            # Position the table; ensure it does not overlap header/client/payment block
             table_width, table_height = table.wrap(0, 0)
             x_position = (width - table_width) / 2
-            y_position = height - 380
-            table.wrapOn(c, width, height)
+            desired_margin_top = 250
+            default_y_top = height - desired_margin_top
+            safe_y_top = min(default_y_top, current_y - 20)
+            y_position = safe_y_top - table_height
             table.drawOn(c, x_position, y_position)
+
             
             # Summary section (aligned right, under table)
+            # Requirements:
+            # - Distance from end of the table to first summary line: 20pt
+            # - Distance between each summary line: 16pt
             summary_x = width - 200
-            summary_y = y_position - 50
+            line_spacing = 16
+            summary_y = y_position - 20
             
             c.setFont("Helvetica", 10)
             total_ht_brut = data.get('total_ht', total_ht)
             c.drawString(summary_x, summary_y, f"Total HT Brut: {total_ht_brut:.2f} DA")
             
             discount = data.get('discount', '0%')
-            c.drawString(summary_x, summary_y - 20, f"Remise: {discount}")
+            c.drawString(summary_x, summary_y - line_spacing, f"Remise: {discount}")
             
             total_ht_net = data.get('total_ht_net', total_ht_brut)
-            c.drawString(summary_x, summary_y - 40, f"Total HT Net: {total_ht_net:.2f} DA")
+            c.drawString(summary_x, summary_y - (2 * line_spacing), f"Total HT Net: {total_ht_net:.2f} DA")
             
             tva_amount = data.get('tva_amount', total_ht_net * Decimal('0.19'))
             tva_label = data.get('tva_label', 'TVA (19%)')
-            curr_y = summary_y - 60
+            curr_y = summary_y - (3 * line_spacing)
             if include_tva:
                 c.drawString(summary_x, curr_y, f"{tva_label}: {tva_amount:.2f} DA")
-                curr_y -= 20
+                curr_y -= line_spacing
                 total_ttc = data.get('total_ttc', total_ht_net + tva_amount)
                 c.drawString(summary_x, curr_y, f"Total TTC: {total_ttc:.2f} DA")
-                curr_y -= 20
+                curr_y -= line_spacing
                 timbre = data.get('timbre', 0)
                 try:
                     timbre_val = Decimal(str(timbre))
                 except Exception:
                     timbre_val = Decimal('0')
                 c.drawString(summary_x, curr_y, f"TIMBRE 1%: {timbre_val:.2f} DA")
-                curr_y -= 30
+                curr_y -= line_spacing
             else:
                 # Without TVA, skip TVA and TIMBRE rows entirely and compute TTC inline
                 total_ttc = data.get('total_ttc', total_ht_net)
                 c.drawString(summary_x, curr_y, f"Total TTC: {total_ttc:.2f} DA")
-                curr_y -= 30
+                curr_y -= line_spacing
 
-            # Total TTC NET - bold, night blue highlight
+            # Total TTC NET - bold, night blue highlight, spaced by 12pt from previous line
             c.setFont("Helvetica-Bold", 12)
             c.setFillColor(night_blue)
             total_ttc_net = data.get('total_ttc_net', total_ttc)
-            c.drawString(summary_x, curr_y - 20, f"Total TTC NET: {total_ttc_net:.2f} DA")
+            c.drawString(summary_x, curr_y, f"Total TTC NET: {total_ttc_net:.2f} DA")
+            # Capture anchor for footer placement (first footer line will be 50pt below this)
+            footer_anchor_y = curr_y
             
             # Reset color for footer
             c.setFillColor(colors.black)
@@ -1489,6 +1533,7 @@ class PDFFormFiller:
         c.setFont("Helvetica", 10)
         c.setFillColor(colors.red)
         amount_in_words = data.get('amount_in_words', '')
+        last_amount_line_y = None  # track the Y of the last red line
         if amount_in_words:
             # Split long text into multiple lines
             max_width = width - 100
@@ -1506,19 +1551,27 @@ class PDFFormFiller:
             if current_line:
                 lines.append(current_line)
             
-            # Draw each line
-            footer_y = 150
+            # Draw each line, with the first line exactly 50pt below the 'Total TTC NET' line if available
+            if footer_anchor_y is not None:
+                footer_y = max(50, footer_anchor_y - 50)  # keep above bottom margin
+            else:
+                footer_y = 150
             for line in lines:
                 c.drawString(50, footer_y, line)
+                last_amount_line_y = footer_y
                 footer_y -= 15
         
         # Signature placeholder bottom right
         c.setFont("Helvetica", 10)
         c.setFillColor(colors.black)
         signature_x = width - 200
-        signature_y = 80
+        # If we drew the amount-in-words, place signature exactly 50pt below the last red line
+        if last_amount_line_y is not None:
+            signature_y = max(50, last_amount_line_y - 50)  # keep a small bottom margin
+        else:
+            signature_y = 80
         
-        c.drawString(signature_x, signature_y, "SIGNATURE: …")
+        c.drawString(signature_x, signature_y, "SIGNATURE:")
         
         signature_date = data.get('signature_date', date.today().strftime('%d/%m/%Y'))
         c.drawString(signature_x, signature_y - 20, f"Bejaia le: {signature_date}")
