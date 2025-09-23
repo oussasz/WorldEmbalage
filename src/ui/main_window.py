@@ -2743,13 +2743,19 @@ class MainWindow(QMainWindow):
                 ~Reception.notes.like('[ARCHIVED]%')
             ).all()
             
-            # Group receptions by dimensions (extracted from notes) AND by client; sum quantities
-            # Rules:
-            # - Dimensions are parsed strictly from notes pattern: 'Arrivée matière: WxLxRmm'
-            # - Merge only when BOTH dimensions AND the set of client IDs match
-            # - If dimensions cannot be parsed (unknown), do not merge those receptions
+            # Group receptions (raw materials) with STRICT rules:
+            # - Same single client (exact one client_id)
+            # - Same dimensions (plaque dimensions parsed as 'WxLxRmm' from notes)
+            # - Same description (parsed from notes after ' — ' or using notes directly when not starting with label)
+            # - If any component is unknown/missing, do NOT merge (isolate by unique ID)
             grouped_receptions = {}
             reception_groups = {}  # To track which receptions belong to each group
+            
+            def _norm_text(s: str) -> str:
+                try:
+                    return " ".join(s.strip().lower().split())
+                except Exception:
+                    return s.strip().lower() if s else ""
             
             for r in receptions:
                 # Extract dimensions from notes (format: "Arrivée matière: 100x200x50mm")
@@ -2791,16 +2797,28 @@ class MainWindow(QMainWindow):
                 if len(clients_display) > 40:
                     clients_display = clients_display[:37] + "..."
                 
-                # Build a canonical clients key from sorted client IDs for grouping
-                clients_key = ",".join(map(str, sorted(clients_ids_set))) if clients_ids_set else "N/A"
+                # Determine single client id key (strict). If multiple or none, do not merge.
+                client_id_key = None
+                if len(clients_ids_set) == 1:
+                    client_id_key = str(next(iter(clients_ids_set)))
 
-                # Do NOT merge when dimensions are unknown (avoid accidental merges)
-                if dimensions_key == "unknown":
-                    # Treat each reception as its own group using a unique key
-                    group_key = f"{dimensions_key}|{clients_key}|{r.id}"
+                # Parse a description key from notes, when available
+                desc_key = "n/a"
+                try:
+                    if r.notes and r.notes.strip():
+                        if "—" in r.notes:
+                            desc_key = _norm_text(r.notes.split("—", 1)[1])
+                        elif not r.notes.startswith("Arrivée matière:"):
+                            desc_key = _norm_text(r.notes)
+                except Exception:
+                    pass
+
+                # Build grouping key only when all three strict attributes are known
+                if dimensions_key != "unknown" and client_id_key and desc_key != "n/a":
+                    group_key = f"{dimensions_key}|client:{client_id_key}|desc:{desc_key}"
                 else:
-                    # Merge strictly when BOTH dimensions and client(s) match
-                    group_key = f"{dimensions_key}|{clients_key}"
+                    # Treat each reception as its own group using a unique key
+                    group_key = f"{dimensions_key}|client:{client_id_key or 'N/A'}|desc:{desc_key}|id:{r.id}"
                 
                 if group_key not in grouped_receptions:
                     # First reception for these dimensions
@@ -3054,12 +3072,20 @@ class MainWindow(QMainWindow):
                     if hasattr(pb, 'production_date') and pb.production_date:
                         production_date = pb.production_date.strftime('%Y-%m-%d')
                     
-                    # STRICT GROUPING: Only group if SAME CLIENT ID + SAME EXACT DIMENSIONS
-                    # This ensures products are only merged if they truly belong to same client with identical specs
-                    group_key = (client_id, caisse_dims)
-                    
-                    # Skip grouping if we don't have both client_id and dimensions
-                    if client_id is None or caisse_dims == "N/A":
+                    # STRICT GROUPING for finished products:
+                    # Require SAME CLIENT ID + SAME EXACT CAISSE DIMENSIONS + SAME DESCRIPTION
+                    def _norm_text(s: str) -> str:
+                        try:
+                            return " ".join(s.strip().lower().split())
+                        except Exception:
+                            return s.strip().lower() if s else ""
+
+                    desc_key = _norm_text(description) if description and description != "N/A" else None
+                    group_key = None
+
+                    if client_id is not None and caisse_dims != "N/A" and desc_key:
+                        group_key = (client_id, caisse_dims, desc_key)
+                    else:
                         # Create unique key for ungroupable items to prevent incorrect merging
                         group_key = (f"ungroupable_{pb.id}", f"batch_{pb.id}")
                     

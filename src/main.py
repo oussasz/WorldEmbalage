@@ -1,6 +1,7 @@
 from __future__ import annotations
 import sys
 from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon
 from pathlib import Path
 from config.logging_config import logger
@@ -66,19 +67,49 @@ def main():
     window.resize(1400, 800)
 
     # Use QTimer to launch main window after splash
+    _launch_state = {"launched": False}
     def launch_main_window():
+        # Guard against double-launch from both timer and splash signal
+        if _launch_state.get("launched"):
+            return
+        _launch_state["launched"] = True
         logger.info("Lancement de la fenêtre principale...")
-        splash.close()
-        window.show()
-        window.raise_()
-        window.activateWindow()
+        try:
+            splash.close()
+        except Exception:
+            pass
+        # Start maximized to fill screen, while keeping window controls (minimize/restore/close)
+        try:
+            from PyQt6.QtCore import Qt, QTimer
+            # Set the window state to maximized first (helps some WMs)
+            try:
+                window.setWindowState(window.windowState() | Qt.WindowState.WindowMaximized)
+            except Exception:
+                pass
+            # Show and then apply showMaximized (order matters on some Linux WMs)
+            window.show()
+            try:
+                window.showMaximized()
+            except Exception:
+                pass
+            # Apply a zero-delay re-maximize to catch any late layout/WM adjustments
+            try:
+                QTimer.singleShot(0, window.showMaximized)
+            except Exception:
+                pass
+        except Exception:
+            window.show()
+        try:
+            window.raise_()
+            window.activateWindow()
+        except Exception:
+            pass
         logger.info("Fenêtre principale lancée")
 
     # Start splash and schedule main window launch
     splash.start()
     
     # Alternative: use QTimer as backup
-    from PyQt6.QtCore import QTimer
     timer = QTimer()
     timer.setSingleShot(True)
     timer.timeout.connect(launch_main_window)
@@ -86,6 +117,15 @@ def main():
     
     # Also connect to splash signal
     splash.signals.finished.connect(launch_main_window)
+
+    # Extra enforcement for some Linux window managers: re-apply maximized shortly after show
+    def _enforce_maximize():
+        try:
+            window.setWindowState(window.windowState() | Qt.WindowState.WindowMaximized)
+            window.showMaximized()
+        except Exception:
+            pass
+    QTimer.singleShot(50, _enforce_maximize)
 
     sys.exit(app.exec())
 

@@ -265,10 +265,22 @@ class Dashboard(QWidget):
         self._setup_refresh_timer()
         
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        # Use a scroll area to allow vertical scrolling specifically for the dashboard
+        root_layout = QVBoxLayout(self)
+        root_layout.setSpacing(0)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        root_layout.addWidget(scroll)
+
+        container = QWidget()
+        layout = QVBoxLayout(container)
         layout.setSpacing(16)
         layout.setContentsMargins(16, 16, 16, 16)
-        
+
         # Header
         header = QLabel("TB Tableau de Bord - World Embalage")
         header.setStyleSheet("""
@@ -287,43 +299,25 @@ class Dashboard(QWidget):
         stats_layout2.setSpacing(12)
 
         self.plaques_stock_card = StatCard("Plaques en stock", "0", "PL", "#0D6EFD")
-        self.pf_stock_card = StatCard("PF en stock", "0", "PF", "#20C997")
         self.devis_unconfirmed_card = StatCard("Devis non confirmés", "0", "D", "#6F42C1")
         self.supplier_initial_card = StatCard("Cmd. MP non passées", "0", "CM", "#FD7E14")
 
         # Navigate suggestions: clicking opens orders tab by default
         self.plaques_stock_card.clicked.connect(lambda: self.tabChangeRequested.emit(3))
-        self.pf_stock_card.clicked.connect(lambda: self.tabChangeRequested.emit(5))
         self.devis_unconfirmed_card.clicked.connect(lambda: self.tabChangeRequested.emit(3))
         self.supplier_initial_card.clicked.connect(lambda: self.tabChangeRequested.emit(3))
 
         stats_layout2.addWidget(self.plaques_stock_card)
-        stats_layout2.addWidget(self.pf_stock_card)
         stats_layout2.addWidget(self.devis_unconfirmed_card)
         stats_layout2.addWidget(self.supplier_initial_card)
 
         layout.addLayout(stats_layout2)
 
-        # Middle section: two analytical tables
+        # Middle section: analytical panes side by side
         mid_layout = QHBoxLayout()
         mid_layout.setSpacing(16)
 
-        # Finished products stock table
-        self.pf_table_frame = QFrame()
-        self.pf_table_frame.setStyleSheet("""
-            QFrame { background: white; border: 1px solid #E2E6EA; border-radius: 8px; }
-            QHeaderView::section { background: #F8F9FA; font-weight: 600; }
-        """)
-        pf_vbox = QVBoxLayout(self.pf_table_frame)
-        pf_header = QLabel("📦 Produits finis en stock (Top 10)")
-        pf_header.setStyleSheet("font-size: 16px; font-weight: bold; color: #2C3E50; margin: 8px;")
-        self.pf_table = QTableWidget(0, 6)
-        self.pf_table.setHorizontalHeaderLabels(["Désignation", "Client", "Produit", "Livré", "Stock", "%"]) 
-        self.pf_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        pf_vbox.addWidget(pf_header)
-        pf_vbox.addWidget(self.pf_table)
-
-        # Supplier orders progress table
+        # Supplier orders progress table (left)
         self.supplier_table_frame = QFrame()
         self.supplier_table_frame.setStyleSheet("""
             QFrame { background: white; border: 1px solid #E2E6EA; border-radius: 8px; }
@@ -338,20 +332,17 @@ class Dashboard(QWidget):
         so_vbox.addWidget(so_header)
         so_vbox.addWidget(self.supplier_table)
 
-        mid_layout.addWidget(self.pf_table_frame, 1)
         mid_layout.addWidget(self.supplier_table_frame, 1)
+
+        # Recent activity (right)
+        self.activities_widget = RecentActivityWidget()
+        self.activities_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        mid_layout.addWidget(self.activities_widget, 1)
 
         layout.addLayout(mid_layout)
 
-        # Bottom section: activities only (Quick Actions removed per request)
-        bottom_layout = QHBoxLayout()
-        bottom_layout.setSpacing(16)
-
-        self.activities_widget = RecentActivityWidget()
-        self.activities_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-
-        bottom_layout.addWidget(self.activities_widget, 1)
-        layout.addLayout(bottom_layout)
+        # Set the container as scrollable content
+        scroll.setWidget(container)
         
     def _setup_refresh_timer(self):
         """Setup auto-refresh timer"""
@@ -376,17 +367,14 @@ class Dashboard(QWidget):
 
             # Compute requested KPIs
             plaques_stock = self._compute_plaques_stock(session)
-            pf_stock_total, pf_rows = self._compute_finished_products_stock(session)
             devis_unconfirmed = self._compute_unconfirmed_quotations(session)
             supplier_initial = self._compute_supplier_orders_initial(session)
 
             self.plaques_stock_card.update_value(str(plaques_stock))
-            self.pf_stock_card.update_value(str(pf_stock_total))
             self.devis_unconfirmed_card.update_value(str(devis_unconfirmed))
             self.supplier_initial_card.update_value(str(supplier_initial))
 
-            # Populate tables
-            self._populate_pf_table(pf_rows)
+            # Populate tables (PF top-10 removed)
             self._populate_supplier_table(session)
             
             # Update recent activities
@@ -577,26 +565,6 @@ class Dashboard(QWidget):
             return 0
 
     # ----- Table population -----
-    def _populate_pf_table(self, rows: list[dict]):
-        try:
-            self.pf_table.setRowCount(0)
-            for r in rows:
-                row = self.pf_table.rowCount()
-                self.pf_table.insertRow(row)
-                self.pf_table.setItem(row, 0, QTableWidgetItem(str(r.get('designation', ''))))
-                self.pf_table.setItem(row, 1, QTableWidgetItem(str(r.get('client', ''))))
-                self.pf_table.setItem(row, 2, QTableWidgetItem(str(r.get('produced', 0))))
-                self.pf_table.setItem(row, 3, QTableWidgetItem(str(r.get('delivered', 0))))
-                self.pf_table.setItem(row, 4, QTableWidgetItem(str(r.get('stock', 0))))
-                # Progress bar for stock percentage
-                prog = QProgressBar()
-                prog.setValue(int(r.get('percent', 0)))
-                prog.setFormat("%p%")
-                prog.setStyleSheet("QProgressBar { border: 1px solid #ced4da; border-radius: 4px; text-align: center; }"
-                                   "QProgressBar::chunk { background-color: #20C997; }")
-                self.pf_table.setCellWidget(row, 5, prog)
-        except Exception as e:
-            print(f"PF table update failed: {e}")
 
     def _populate_supplier_table(self, session):
         try:
