@@ -520,7 +520,7 @@ class SupplierOrderDetailDialog(QDialog):
         table = QTableWidget()
         headers = [
             "Ligne", "Client", "Dimensions Caisse\n(L×l×H mm)", 
-            "Dimensions Plaque\n(L×l×R mm)", "Réf. Matière", 
+            "Dimensions Plaque\n(l/L/R mm)", "Réf. Matière", 
             "Caractéristiques", "Quantité", "Prix UTTC/Plaque", 
             "Total Ligne", "Notes"
         ]
@@ -555,7 +555,8 @@ class SupplierOrderDetailDialog(QDialog):
             plaque_l = getattr(line_item, 'plaque_length_mm', 0) or 0
             plaque_w = getattr(line_item, 'plaque_width_mm', 0) or 0
             plaque_f = getattr(line_item, 'plaque_flap_mm', 0) or 0
-            plaque_dims = f"{plaque_l}×{plaque_w}×{plaque_f}"
+            # Display as largeur/longueur/Rrabat (e.g., 1200/800/R30)
+            plaque_dims = f"{plaque_w}/{plaque_l}/R{plaque_f}"
             table.setItem(row, 3, QTableWidgetItem(plaque_dims))
             
             # Material reference

@@ -57,13 +57,13 @@ class RawMaterialArrivalDialog(QDialog):
         group_layout = QGridLayout(group)
         
         # Dimension inputs
-        group_layout.addWidget(QLabel("Langeur(mm):"), 0, 0)
+        group_layout.addWidget(QLabel("Largeur (mm):"), 0, 0)
         self.width_input = QSpinBox()
         self.width_input.setRange(1, 10000)
         self.width_input.setValue(1000)
         group_layout.addWidget(self.width_input, 0, 1)
         
-        group_layout.addWidget(QLabel("Largeur (mm):"), 0, 2)
+        group_layout.addWidget(QLabel("Langeur(mm):"), 0, 2)
         self.height_input = QSpinBox()
         self.height_input.setRange(1, 10000)
         self.height_input.setValue(1000)
