@@ -211,24 +211,6 @@ src/
 - Tableau de bord moderne avec statistiques en temps réel
 - Interface utilisateur traduite en français
 
-## Création d'un exécutable Windows (optionnel)
-
-Méthode rapide avec PyInstaller (GUI, sans console):
-
-```powershell
-# Dans PowerShell, après activation du venv
-pip install pyinstaller
-pyinstaller packaging/WorldEmbalage.spec
-```
-
-Le binaire se trouve dans `dist/WorldEmbalage/WorldEmbalage.exe`.
-
-Notes:
-
-- Les templates PDF sont inclus via la spec (`template/`), ainsi que `LOGO.jpg`.
-- Les dossiers `logs/` et `generated_reports/` sont créés au runtime si absents.
-- Si vous déplacez des ressources, mettez à jour la spec ou conservez les chemins existants.
-
 ### 🚧 En Cours / Étapes Suivantes
 
 - Implémentation complète logique métier dans services
